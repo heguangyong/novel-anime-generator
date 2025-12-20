@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Novel Anime Generator REST API Definition -->
+<resource xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/rest-api-3.xsd"
+        name="novel-anime" displayName="Novel Anime Generator REST API" version="1.0.0" require-authentication="anonymous-view"
+        description="REST API for Novel Anime Generator - User Authentication and Credits Management">
+
+    <!-- Auth Resources -->
+    <resource name="auth">
+        <resource name="register"><method type="post">
+            <service name="NovelAnimeAuthServices.register#User"/></method></resource>
+        <resource name="login"><method type="post">
+            <service name="NovelAnimeAuthServices.login#User"/></method></resource>
+        <resource name="validate">
+            <method type="get"><service name="NovelAnimeAuthServices.validate#Token"/></method>
+            <method type="post"><service name="NovelAnimeAuthServices.validate#Token"/></method>
+        </resource>
+        <resource name="logout"><method type="post">
+            <service name="NovelAnimeAuthServices.logout#User"/></method></resource>
+        <resource name="refresh"><method type="post">
+            <service name="NovelAnimeAuthServices.refresh#Token"/></method></resource>
+
+        <!-- OAuth Resources -->
+        <resource name="oauth">
+            <!-- GitHub OAuth -->
+            <resource name="github">
+                <resource name="url"><method type="get">
+                    <service name="NovelAnimeAuthServices.get#GitHubAuthUrl"/></method></resource>
+                <method type="post"><service name="NovelAnimeAuthServices.login#WithGitHub"/></method>
+                <resource name="callback"><method type="get">
+                    <service name="NovelAnimeAuthServices.handle#GitHubCallback"/></method></resource>
+            </resource>
+
+            <!-- Google OAuth -->
+            <resource name="google">
+                <resource name="url"><method type="get">
+                    <service name="NovelAnimeAuthServices.get#GoogleAuthUrl"/></method></resource>
+                <method type="post"><service name="NovelAnimeAuthServices.login#WithGoogle"/></method>
+                <resource name="callback"><method type="get">
+                    <service name="NovelAnimeAuthServices.handle#GoogleCallback"/></method></resource>
+            </resource>
+
+            <!-- WeChat OAuth -->
+            <resource name="wechat">
+                <method type="post"><service name="NovelAnimeAuthServices.login#WithWeChat"/></method>
+                <resource name="callback"><method type="get">
+                    <service name="NovelAnimeAuthServices.handle#WeChatCallback"/></method></resource>
+            </resource>
+        </resource>
+
+        <!-- WeChat QR Code -->
+        <resource name="wechat">
+            <resource name="qrcode"><method type="get">
+                <service name="NovelAnimeAuthServices.get#WeChatQRCode"/></method></resource>
+            <resource name="status"><method type="get">
+                <service name="NovelAnimeAuthServices.check#WeChatLoginStatus"/></method></resource>
+        </resource>
+    </resource>
+
+    <!-- Credits Resources -->
+    <resource name="credits">
+        <resource name="balance"><method type="get">
+            <service name="NovelAnimeCreditsServices.get#CreditsBalance"/></method></resource>
+        <resource name="consume"><method type="post">
+            <service name="NovelAnimeCreditsServices.consume#Credits"/></method></resource>
+        <resource name="history"><method type="get">
+            <service name="NovelAnimeCreditsServices.get#CreditsHistory"/></method></resource>
+    </resource>
+
+</resource>

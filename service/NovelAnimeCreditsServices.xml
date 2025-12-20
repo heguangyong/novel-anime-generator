@@ -164,6 +164,9 @@
                 try {
                     // Use transaction to ensure atomicity (Requirement 8.3 - rollback on failure)
                     ec.transaction.begin()
+                    
+                    // Disable authorization for entity operations
+                    ec.artifactExecution.disableAuthz()
 
                     // Get user record with FOR UPDATE lock to prevent race conditions
                     def userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
@@ -173,7 +176,7 @@
                         .one()
 
                     if (!userRecord) {
-                        ec.transaction.rollback()
+                        ec.transaction.rollback("Error in credits operation", null)
                         success = false
                         message = "User not found."
                         errorCode = "USER_NOT_FOUND"
@@ -181,7 +184,7 @@
                     }
 
                     if (userRecord.status != 'active') {
-                        ec.transaction.rollback()
+                        ec.transaction.rollback("Error in credits operation", null)
                         success = false
                         message = "User account is not active."
                         errorCode = "ACCOUNT_INACTIVE"
@@ -192,7 +195,7 @@
 
                     // Check sufficient balance before deduction (Requirement 4.1, 4.2)
                     if (currentBalance < amount) {
-                        ec.transaction.rollback()
+                        ec.transaction.rollback("Error in credits operation", null)
                         success = false
                         message = "Insufficient credits. Required: ${amount}, Available: ${currentBalance}"
                         errorCode = "INSUFFICIENT_CREDITS"
@@ -206,7 +209,7 @@
 
                     // Record transaction with all required fields (Requirement 8.1)
                     def now = ec.user.nowTimestamp
-                    transactionId = ec.entity.sequencedIdPrimary
+                    transactionId = UUID.randomUUID().toString()
                     def transactionDescription = description ?: "Credits consumed for ${operationType}"
 
                     ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
@@ -221,6 +224,9 @@
                     ]).create()
 
                     ec.transaction.commit()
+                    
+                    // Re-enable authorization
+                    ec.artifactExecution.enableAuthz()
 
                     success = true
                     message = "Credits consumed successfully. New balance: ${newBalance}"
@@ -228,7 +234,7 @@
                     ec.logger.info("Credits consumed for user ${targetUserId}: ${amount} credits for ${operationType}, new balance: ${newBalance}")
 
                 } catch (Exception e) {
-                    ec.transaction.rollback()
+                    ec.transaction.rollback("Error in credits operation", null)
                     ec.logger.error("Failed to consume credits for user ${targetUserId}", e)
                     success = false
                     message = "Failed to consume credits: " + e.message

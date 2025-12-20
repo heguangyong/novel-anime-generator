@@ -34,6 +34,14 @@
     <default-property name="wechat.oauth.userinfo_url" value="https://api.weixin.qq.com/sns/userinfo"/>
     <default-property name="wechat.oauth.scope" value="snsapi_login"/>
     <default-property name="wechat.oauth.qr_expire_seconds" value="600"/>
+
+    <!-- REST API Configuration -->
+    <rest-api-list>
+        <rest-api name="s1">
+            <resource name="novel-anime" location="component://novel-anime-generator/service/novel-anime.rest.xml"/>
+        </rest-api>
+    </rest-api-list>
+
     <webapp-list>
         <webapp name="novel-anime" http-port="8080" https-port="8443" 
                 http-host="*" allow-subdomain-sessions="true">
@@ -53,6 +61,7 @@
         <service-location name="novel.anime.NovelAnimeServices" location="component://novel-anime-generator/service/NovelAnimeServices.xml"/>
         <service-location name="novel.anime.NovelAnimeRestServices" location="component://novel-anime-generator/service/NovelAnimeRestServices.xml"/>
         <service-location name="novel.anime.NovelAnimeAuthServices" location="component://novel-anime-generator/service/NovelAnimeAuthServices.xml"/>
+        <service-location name="novel.anime.NovelAnimeCreditsServices" location="component://novel-anime-generator/service/NovelAnimeCreditsServices.xml"/>
     </service-facade>
 
     <!-- Screen configuration -->

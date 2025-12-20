@@ -74,6 +74,9 @@
                 }
 
                 try {
+                    // Disable authorization for entity creation
+                    ec.artifactExecution.disableAuthz()
+                    
                     // Generate secure password hash using SHA-256 with salt
                     def random = new SecureRandom()
                     def saltBytes = new byte[16]
@@ -86,7 +89,7 @@
                     def passwordHash = salt + ":" + hashedPassword
 
                     // Generate user ID
-                    userId = ec.entity.sequencedIdPrimary
+                    userId = UUID.randomUUID().toString()
 
                     // Create user with 500 initial credits (Requirement 1.1)
                     def now = ec.user.nowTimestamp
@@ -107,7 +110,7 @@
 
                     // Record initial credits transaction
                     ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
-                        transactionId: ec.entity.sequencedIdPrimary,
+                        transactionId: UUID.randomUUID().toString(),
                         userId: userId,
                         amount: 500,
                         type: 'initial',
@@ -116,6 +119,9 @@
                         balanceAfter: 500,
                         timestamp: now
                     ]).create()
+                    
+                    // Re-enable authorization
+                    ec.artifactExecution.enableAuthz()
 
                     // Generate JWT tokens (Requirement 1.5 - auto login)
                     def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
@@ -1147,7 +1153,7 @@
 
                             // Create OAuth account link
                             ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
-                                oauthAccountId: ec.entity.sequencedIdPrimary,
+                                oauthAccountId: UUID.randomUUID().toString(),
                                 userId: userId,
                                 provider: "github",
                                 providerUserId: githubUserId,
@@ -1173,7 +1179,7 @@
                         } else {
                             // Step 3: Create new user with 500 initial credits (Requirement 2.1.4)
                             isNewUser = true
-                            userId = ec.entity.sequencedIdPrimary
+                            userId = UUID.randomUUID().toString()
                             def displayName = username ?: email.split('@')[0]
 
                             // Create new user
@@ -1192,7 +1198,7 @@
 
                             // Record initial credits transaction
                             ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
-                                transactionId: ec.entity.sequencedIdPrimary,
+                                transactionId: UUID.randomUUID().toString(),
                                 userId: userId,
                                 amount: 500,
                                 type: 'initial',
@@ -1204,7 +1210,7 @@
 
                             // Create OAuth account link
                             ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
-                                oauthAccountId: ec.entity.sequencedIdPrimary,
+                                oauthAccountId: UUID.randomUUID().toString(),
                                 userId: userId,
                                 provider: "github",
                                 providerUserId: githubUserId,
@@ -1726,7 +1732,7 @@
 
                             // Create OAuth account link
                             ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
-                                oauthAccountId: ec.entity.sequencedIdPrimary,
+                                oauthAccountId: UUID.randomUUID().toString(),
                                 userId: userId,
                                 provider: "google",
                                 providerUserId: googleUserId,
@@ -1752,7 +1758,7 @@
                         } else {
                             // Step 3: Create new user with 500 initial credits (Requirement 2.2.4)
                             isNewUser = true
-                            userId = ec.entity.sequencedIdPrimary
+                            userId = UUID.randomUUID().toString()
                             def displayName = username ?: (givenName && familyName ? "${givenName} ${familyName}" : givenName ?: email.split('@')[0])
 
                             // Create new user
@@ -1771,7 +1777,7 @@
 
                             // Record initial credits transaction
                             ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
-                                transactionId: ec.entity.sequencedIdPrimary,
+                                transactionId: UUID.randomUUID().toString(),
                                 userId: userId,
                                 amount: 500,
                                 type: 'initial',
@@ -1783,7 +1789,7 @@
 
                             // Create OAuth account link
                             ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
-                                oauthAccountId: ec.entity.sequencedIdPrimary,
+                                oauthAccountId: UUID.randomUUID().toString(),
                                 userId: userId,
                                 provider: "google",
                                 providerUserId: googleUserId,
@@ -2478,7 +2484,7 @@
                         
                         // Step 3: Create new user with 500 initial credits (Requirement 2.3.4)
                         isNewUser = true
-                        userId = ec.entity.sequencedIdPrimary
+                        userId = UUID.randomUUID().toString()
                         def displayName = nickname ?: "WeChat User"
                         
                         // Generate a placeholder email using openid
@@ -2500,7 +2506,7 @@
 
                         // Record initial credits transaction
                         ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
-                            transactionId: ec.entity.sequencedIdPrimary,
+                            transactionId: UUID.randomUUID().toString(),
                             userId: userId,
                             amount: 500,
                             type: 'initial',
@@ -2512,7 +2518,7 @@
 
                         // Create OAuth account link
                         ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
-                            oauthAccountId: ec.entity.sequencedIdPrimary,
+                            oauthAccountId: UUID.randomUUID().toString(),
                             userId: userId,
                             provider: "wechat",
                             providerUserId: wechatUserId,
