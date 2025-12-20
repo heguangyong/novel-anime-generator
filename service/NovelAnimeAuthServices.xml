@@ -292,8 +292,10 @@
 
                     // Update lastLoginDate
                     def now = ec.user.nowTimestamp
+                    ec.artifactExecution.disableAuthz()
                     userRecord.lastLoginDate = now
                     userRecord.update()
+                    ec.artifactExecution.enableAuthz()
 
                     // Generate JWT tokens (Requirement 2.1 - store Auth_Token)
                     def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
