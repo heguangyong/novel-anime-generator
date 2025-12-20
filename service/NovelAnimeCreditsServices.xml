@@ -1,0 +1,380 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- Novel Anime Credits Management Services -->
+
+    <!-- Get Credits Balance Service -->
+    <service verb="get" noun="CreditsBalance" authenticate="anonymous-view">
+        <description>Return current user credits balance.
+        Requirements: 3.1</description>
+        <in-parameters>
+            <parameter name="userId">
+                <description>User ID (optional - will be extracted from JWT token if not provided)</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="balance" type="Integer"/>
+            <parameter name="isLow" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.util.Base64
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+
+                def targetUserId = userId
+
+                // If no userId provided, extract from JWT token
+                if (!targetUserId && ec.web?.request) {
+                    def authHeader = ec.web.request.getHeader("Authorization")
+                    if (authHeader && authHeader.startsWith("Bearer ")) {
+                        def jwtToken = authHeader.substring(7)
+                        try {
+                            def parts = jwtToken.split('\\.')
+                            if (parts.length == 3) {
+                                def payloadJson = new String(Base64.urlDecoder.decode(parts[1]), StandardCharsets.UTF_8)
+                                def payload = new JsonSlurper().parseText(payloadJson)
+                                targetUserId = payload.sub
+                            }
+                        } catch (Exception e) {
+                            ec.logger.warn("Failed to extract userId from token", e)
+                        }
+                    }
+                }
+
+                if (!targetUserId) {
+                    success = false
+                    message = "User ID not provided and could not be extracted from token."
+                    errorCode = "NO_USER_ID"
+                    return
+                }
+
+                try {
+                    // Get user record to check credits balance
+                    def userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        .condition("userId", targetUserId)
+                        .disableAuthz()
+                        .one()
+
+                    if (!userRecord) {
+                        success = false
+                        message = "User not found."
+                        errorCode = "USER_NOT_FOUND"
+                        return
+                    }
+
+                    if (userRecord.status != 'active') {
+                        success = false
+                        message = "User account is not active."
+                        errorCode = "ACCOUNT_INACTIVE"
+                        return
+                    }
+
+                    // Return current credits balance (Requirement 3.1)
+                    balance = userRecord.credits ?: 0
+                    
+                    // Check if credits are low (< 50) (Requirement 3.3)
+                    isLow = balance < 50
+
+                    success = true
+                    message = "Credits balance retrieved successfully."
+
+                    ec.logger.info("Credits balance retrieved for user ${targetUserId}: ${balance}")
+
+                } catch (Exception e) {
+                    ec.logger.error("Failed to get credits balance for user ${targetUserId}", e)
+                    success = false
+                    message = "Failed to retrieve credits balance: " + e.message
+                    errorCode = "BALANCE_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Consume Credits Service -->
+    <service verb="consume" noun="Credits" authenticate="anonymous-view">
+        <description>Check sufficient balance before deduction, deduct credits atomically, 
+        record transaction with all required fields, and return new balance.
+        Requirements: 4.1, 4.2, 4.3, 8.1</description>
+        <in-parameters>
+            <parameter name="userId">
+                <description>User ID (optional - will be extracted from JWT token if not provided)</description>
+            </parameter>
+            <parameter name="amount" type="Integer" required="true">
+                <description>Amount of credits to consume (must be positive)</description>
+            </parameter>
+            <parameter name="operationType" required="true">
+                <description>Type of operation consuming credits (e.g., 'novel-parse', 'character-extract')</description>
+            </parameter>
+            <parameter name="description">
+                <description>Optional description of the operation</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="newBalance" type="Integer"/>
+            <parameter name="transactionId"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.util.Base64
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+
+                def targetUserId = userId
+
+                // If no userId provided, extract from JWT token
+                if (!targetUserId && ec.web?.request) {
+                    def authHeader = ec.web.request.getHeader("Authorization")
+                    if (authHeader && authHeader.startsWith("Bearer ")) {
+                        def jwtToken = authHeader.substring(7)
+                        try {
+                            def parts = jwtToken.split('\\.')
+                            if (parts.length == 3) {
+                                def payloadJson = new String(Base64.urlDecoder.decode(parts[1]), StandardCharsets.UTF_8)
+                                def payload = new JsonSlurper().parseText(payloadJson)
+                                targetUserId = payload.sub
+                            }
+                        } catch (Exception e) {
+                            ec.logger.warn("Failed to extract userId from token", e)
+                        }
+                    }
+                }
+
+                if (!targetUserId) {
+                    success = false
+                    message = "User ID not provided and could not be extracted from token."
+                    errorCode = "NO_USER_ID"
+                    return
+                }
+
+                // Validate amount
+                if (!amount || amount <= 0) {
+                    success = false
+                    message = "Amount must be a positive integer."
+                    errorCode = "INVALID_AMOUNT"
+                    return
+                }
+
+                try {
+                    // Use transaction to ensure atomicity (Requirement 8.3 - rollback on failure)
+                    ec.transaction.begin()
+
+                    // Get user record with FOR UPDATE lock to prevent race conditions
+                    def userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        .condition("userId", targetUserId)
+                        .forUpdate(true)
+                        .disableAuthz()
+                        .one()
+
+                    if (!userRecord) {
+                        ec.transaction.rollback()
+                        success = false
+                        message = "User not found."
+                        errorCode = "USER_NOT_FOUND"
+                        return
+                    }
+
+                    if (userRecord.status != 'active') {
+                        ec.transaction.rollback()
+                        success = false
+                        message = "User account is not active."
+                        errorCode = "ACCOUNT_INACTIVE"
+                        return
+                    }
+
+                    def currentBalance = userRecord.credits ?: 0
+
+                    // Check sufficient balance before deduction (Requirement 4.1, 4.2)
+                    if (currentBalance < amount) {
+                        ec.transaction.rollback()
+                        success = false
+                        message = "Insufficient credits. Required: ${amount}, Available: ${currentBalance}"
+                        errorCode = "INSUFFICIENT_CREDITS"
+                        return
+                    }
+
+                    // Deduct credits atomically (Requirement 4.3)
+                    newBalance = currentBalance - amount
+                    userRecord.credits = newBalance
+                    userRecord.update()
+
+                    // Record transaction with all required fields (Requirement 8.1)
+                    def now = ec.user.nowTimestamp
+                    transactionId = ec.entity.sequencedIdPrimary
+                    def transactionDescription = description ?: "Credits consumed for ${operationType}"
+
+                    ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
+                        transactionId: transactionId,
+                        userId: targetUserId,
+                        amount: (0 - amount), // Negative for consumption
+                        type: 'consume',
+                        operationType: operationType,
+                        description: transactionDescription,
+                        balanceAfter: newBalance,
+                        timestamp: now
+                    ]).create()
+
+                    ec.transaction.commit()
+
+                    success = true
+                    message = "Credits consumed successfully. New balance: ${newBalance}"
+
+                    ec.logger.info("Credits consumed for user ${targetUserId}: ${amount} credits for ${operationType}, new balance: ${newBalance}")
+
+                } catch (Exception e) {
+                    ec.transaction.rollback()
+                    ec.logger.error("Failed to consume credits for user ${targetUserId}", e)
+                    success = false
+                    message = "Failed to consume credits: " + e.message
+                    errorCode = "CONSUME_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Get Credits History Service -->
+    <service verb="get" noun="CreditsHistory" authenticate="anonymous-view">
+        <description>Return paginated transaction records with support for filtering by type.
+        Requirements: 3.4, 8.2</description>
+        <in-parameters>
+            <parameter name="userId">
+                <description>User ID (optional - will be extracted from JWT token if not provided)</description>
+            </parameter>
+            <parameter name="page" type="Integer" default="1">
+                <description>Page number (1-based)</description>
+            </parameter>
+            <parameter name="pageSize" type="Integer" default="20">
+                <description>Number of records per page (max 100)</description>
+            </parameter>
+            <parameter name="type">
+                <description>Filter by transaction type: 'consume', 'add', 'initial', 'refund' (optional)</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="transactions" type="List"/>
+            <parameter name="totalCount" type="Long"/>
+            <parameter name="page" type="Integer"/>
+            <parameter name="pageSize" type="Integer"/>
+            <parameter name="totalPages" type="Integer"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.util.Base64
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+
+                def targetUserId = userId
+
+                // If no userId provided, extract from JWT token
+                if (!targetUserId && ec.web?.request) {
+                    def authHeader = ec.web.request.getHeader("Authorization")
+                    if (authHeader && authHeader.startsWith("Bearer ")) {
+                        def jwtToken = authHeader.substring(7)
+                        try {
+                            def parts = jwtToken.split('\\.')
+                            if (parts.length == 3) {
+                                def payloadJson = new String(Base64.urlDecoder.decode(parts[1]), StandardCharsets.UTF_8)
+                                def payload = new JsonSlurper().parseText(payloadJson)
+                                targetUserId = payload.sub
+                            }
+                        } catch (Exception e) {
+                            ec.logger.warn("Failed to extract userId from token", e)
+                        }
+                    }
+                }
+
+                if (!targetUserId) {
+                    success = false
+                    message = "User ID not provided and could not be extracted from token."
+                    errorCode = "NO_USER_ID"
+                    return
+                }
+
+                // Validate pagination parameters
+                def currentPage = page ?: 1
+                def currentPageSize = pageSize ?: 20
+                
+                if (currentPage < 1) currentPage = 1
+                if (currentPageSize < 1) currentPageSize = 20
+                if (currentPageSize > 100) currentPageSize = 100
+
+                try {
+                    // Verify user exists
+                    def userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        .condition("userId", targetUserId)
+                        .disableAuthz()
+                        .one()
+
+                    if (!userRecord) {
+                        success = false
+                        message = "User not found."
+                        errorCode = "USER_NOT_FOUND"
+                        return
+                    }
+
+                    // Build query for transaction history
+                    def transactionQuery = ec.entity.find("novel.anime.user.CreditTransaction")
+                        .condition("userId", targetUserId)
+                        .disableAuthz()
+
+                    // Apply type filter if provided (Requirement 3.4 - filtering by type)
+                    if (type) {
+                        transactionQuery.condition("type", type)
+                    }
+
+                    // Get total count for pagination
+                    totalCount = transactionQuery.count()
+
+                    // Calculate pagination
+                    totalPages = Math.ceil(totalCount / currentPageSize) as Integer
+                    def offset = (currentPage - 1) * currentPageSize
+
+                    // Get paginated results ordered by timestamp descending (most recent first)
+                    def orderByField = "-timestamp"
+                    def transactionRecords = transactionQuery
+                        .orderBy(orderByField)
+                        .offset(offset)
+                        .limit(currentPageSize)
+                        .list()
+
+                    // Build response list (Requirement 8.2 - paginated transaction records)
+                    transactions = []
+                    transactionRecords.each { record ->
+                        transactions.add([
+                            transactionId: record.transactionId,
+                            amount: record.amount,
+                            type: record.type,
+                            operationType: record.operationType,
+                            description: record.description,
+                            balanceAfter: record.balanceAfter,
+                            timestamp: record.timestamp?.toString()
+                        ])
+                    }
+
+                    page = currentPage
+                    pageSize = currentPageSize
+                    success = true
+                    message = "Credits history retrieved successfully."
+
+                    ec.logger.info("Credits history retrieved for user ${targetUserId}: ${transactions.size()} records (page ${currentPage}/${totalPages})")
+
+                } catch (Exception e) {
+                    ec.logger.error("Failed to get credits history for user ${targetUserId}", e)
+                    success = false
+                    message = "Failed to retrieve credits history: " + e.message
+                    errorCode = "HISTORY_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+</services>

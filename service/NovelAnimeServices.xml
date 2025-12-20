@@ -1,0 +1,444 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- Novel Parser Services -->
+    <service verb="parse" noun="Novel">
+        <description>Parse uploaded novel text and create structured content</description>
+        <in-parameters>
+            <parameter name="textContent" type="String" required="true"/>
+            <parameter name="title" type="String"/>
+            <parameter name="author" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="novelId" type="String"/>
+            <parameter name="novelStructure" type="Map"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.util.regex.Pattern
+                import java.util.regex.Matcher
+                
+                // Generate unique novel ID
+                novelId = ec.entity.sequencedIdPrimary
+                
+                // Validate input
+                if (!textContent || textContent.trim().isEmpty()) {
+                    ec.message.addError("Text content cannot be empty")
+                    return
+                }
+                
+                // Clean and normalize text content
+                String cleanContent = textContent.replaceAll(/\r\n/, '\n')
+                                                .replaceAll(/\r/, '\n')
+                                                .replaceAll(/\n{3,}/, '\n\n')
+                                                .trim()
+                
+                // Detect chapters using pattern matching
+                List<Map> chapters = []
+                String[] lines = cleanContent.split('\n')
+                
+                // Chapter detection patterns
+                List<Pattern> chapterPatterns = [
+                    Pattern.compile(/^第[一二三四五六七八九十\d]+章/),
+                    Pattern.compile(/^Chapter\s+(\d+|[IVXLCDM]+)/, Pattern.CASE_INSENSITIVE),
+                    Pattern.compile(/^第\s*(\d+)\s*章/),
+                    Pattern.compile(/^章节\s*(\d+)/),
+                    Pattern.compile(/^\d+\.\s/),
+                    Pattern.compile(/^[IVXLCDM]+\.\s/, Pattern.CASE_INSENSITIVE),
+                    Pattern.compile(/^-{3,}\s*第.*章\s*-{3,}/),
+                    Pattern.compile(/^={3,}\s*Chapter.*={3,}/, Pattern.CASE_INSENSITIVE),
+                    Pattern.compile(/^第[0-9]+章/)
+                ]
+                
+                Map currentChapter = null
+                List<String> chapterContent = []
+                int chapterNumber = 0
+                
+                for (int i = 0; i < lines.length; i++) {
+                    String line = lines[i].trim()
+                    
+                    // Check if line matches chapter pattern
+                    boolean isChapterStart = chapterPatterns.any { pattern ->
+                        pattern.matcher(line).find()
+                    }
+                    
+                    if (isChapterStart) {
+                        // Save previous chapter
+                        if (currentChapter && chapterContent.size() > 0) {
+                            String content = chapterContent.join('\n').trim()
+                            currentChapter.content = content
+                            currentChapter.wordCount = countWords(content)
+                            chapters.add(currentChapter)
+                        }
+                        
+                        // Start new chapter
+                        chapterNumber++
+                        String chapterId = "chapter_${chapterNumber}"
+                        currentChapter = [
+                            id: chapterId,
+                            title: line ?: "Chapter ${chapterNumber}",
+                            content: '',
+                            wordCount: 0,
+                            chapterNumber: chapterNumber
+                        ]
+                        chapterContent = []
+                    } else if (line.length() > 0) {
+                        chapterContent.add(line)
+                    } else if (chapterContent.size() > 0) {
+                        chapterContent.add('')
+                    }
+                }
+                
+                // Don't forget the last chapter
+                if (currentChapter && chapterContent.size() > 0) {
+                    String content = chapterContent.join('\n').trim()
+                    currentChapter.content = content
+                    currentChapter.wordCount = countWords(content)
+                    chapters.add(currentChapter)
+                }
+                
+                // If no chapters detected, treat as single chapter
+                if (chapters.size() == 0 && cleanContent.length() > 0) {
+                    chapters.add([
+                        id: 'chapter_1',
+                        title: 'Chapter 1',
+                        content: cleanContent,
+                        wordCount: countWords(cleanContent),
+                        chapterNumber: 1
+                    ])
+                }
+                
+                // Calculate total word count
+                int totalWordCount = chapters.sum { it.wordCount } ?: 0
+                
+                // Create novel structure
+                novelStructure = [
+                    title: title ?: extractTitleFromContent(cleanContent),
+                    author: author ?: 'Unknown Author',
+                    chapters: chapters,
+                    metadata: [
+                        wordCount: totalWordCount,
+                        language: detectLanguage(cleanContent),
+                        description: generateDescription(cleanContent)
+                    ]
+                ]
+                
+                // Store in database
+                ec.entity.makeValue("Novel").setAll([
+                    novelId: novelId,
+                    title: novelStructure.title,
+                    author: novelStructure.author,
+                    originalText: textContent,
+                    wordCount: totalWordCount,
+                    status: 'parsed',
+                    createdDate: ec.user.nowTimestamp,
+                    lastUpdated: ec.user.nowTimestamp
+                ]).create()
+                
+                // Store chapters
+                chapters.each { chapter ->
+                    ec.entity.makeValue("Chapter").setAll([
+                        chapterId: ec.entity.sequencedIdPrimary,
+                        novelId: novelId,
+                        chapterNumber: chapter.chapterNumber,
+                        title: chapter.title,
+                        content: chapter.content,
+                        wordCount: chapter.wordCount,
+                        createdDate: ec.user.nowTimestamp
+                    ]).create()
+                }
+                
+                ec.logger.info("Novel parsed successfully: ${novelStructure.title} with ${chapters.size()} chapters")
+                
+                // Helper functions
+                int countWords(String text) {
+                    if (!text) return 0
+                    
+                    // Count Chinese characters
+                    int chineseChars = (text =~ /[\u4e00-\u9fa5]/).size()
+                    
+                    // Count English words
+                    String englishText = text.replaceAll(/[\u4e00-\u9fa5]/, '')
+                    int englishWords = (englishText =~ /\b\w+\b/).size()
+                    
+                    return chineseChars + englishWords
+                }
+                
+                String detectLanguage(String text) {
+                    int chineseChars = (text =~ /[\u4e00-\u9fa5]/).size()
+                    int totalChars = text.length()
+                    
+                    return (chineseChars / totalChars > 0.3) ? 'zh' : 'en'
+                }
+                
+                String generateDescription(String text) {
+                    String[] sentences = text.split(/[。！？.!?]/)
+                    List<String> validSentences = sentences.findAll { it.trim().length() > 0 }
+                    String description = validSentences.take(3).join('。')
+                    return description.length() > 200 ? description.substring(0, 200) + '...' : description
+                }
+                
+                String extractTitleFromContent(String content) {
+                    String[] lines = content.split('\n')
+                    for (String line : lines) {
+                        line = line.trim()
+                        if (line.length() > 0 && line.length() < 100) {
+                            return line
+                        }
+                    }
+                    return 'Untitled Novel'
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="validate" noun="NovelFile">
+        <description>Validate uploaded novel file format</description>
+        <in-parameters>
+            <parameter name="fileContent" type="String" required="true"/>
+            <parameter name="fileName" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="isValid" type="Boolean"/>
+            <parameter name="errorMessage" type="String"/>
+            <parameter name="warnings" type="List"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                List<String> errors = []
+                List<String> warnings = []
+                
+                // Check file extension
+                if (fileName) {
+                    String extension = fileName.toLowerCase().substring(fileName.lastIndexOf('.'))
+                    if (extension != '.txt') {
+                        errors.add("Unsupported file format: ${extension}. Only TXT files are supported.")
+                    }
+                }
+                
+                // Check content
+                if (!fileContent || fileContent.trim().isEmpty()) {
+                    errors.add("File content is empty. Please upload a file with content.")
+                } else {
+                    // Check file size (approximate)
+                    int contentSize = fileContent.getBytes('UTF-8').length
+                    int maxSize = 1024 * 1024 // 1MB
+                    
+                    if (contentSize > maxSize) {
+                        errors.add("File size exceeds maximum allowed size (1MB).")
+                    }
+                    
+                    if (contentSize < 1000) {
+                        warnings.add("File appears to be very small. Please ensure it contains a complete novel.")
+                    }
+                    
+                    // Check for common encoding issues
+                    if (fileContent.contains('\uFFFD')) {
+                        warnings.add("File may have encoding issues. Some characters might not display correctly.")
+                    }
+                }
+                
+                isValid = errors.size() == 0
+                errorMessage = errors.join('; ')
+                warnings = warnings
+                
+                if (!isValid) {
+                    ec.logger.warn("File validation failed: ${errorMessage}")
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Character System Services -->
+    <service verb="identify" noun="Characters">
+        <description>Identify characters from novel chapters</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="characters" type="List"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Implementation will be added in subsequent tasks
+                characters = []
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="lock" noun="CharacterProfile">
+        <description>Lock character attributes to prevent drift</description>
+        <in-parameters>
+            <parameter name="characterId" type="String" required="true"/>
+            <parameter name="attributes" type="Map" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="lockedProfile" type="Map"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Implementation will be added in subsequent tasks
+                lockedProfile = [:]
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Plot Analyzer Services -->
+    <service verb="extract" noun="PlotStructure">
+        <description>Extract main plot structure from novel</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="plotStructure" type="Map"/>
+            <parameter name="keyEvents" type="List"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Implementation will be added in subsequent tasks
+                plotStructure = [:]
+                keyEvents = []
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Episode Generator Services -->
+    <service verb="generate" noun="Episodes">
+        <description>Generate episodes from novel content</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+            <parameter name="targetDuration" type="BigDecimal"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="episodes" type="List"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Implementation will be added in subsequent tasks
+                episodes = []
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Script Converter Services -->
+    <service verb="convert" noun="ToScreenplay">
+        <description>Convert episode content to screenplay format</description>
+        <in-parameters>
+            <parameter name="episodeId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="screenplay" type="Map"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Implementation will be added in subsequent tasks
+                screenplay = [:]
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Storyboard Creator Services -->
+    <service verb="create" noun="Storyboard">
+        <description>Create storyboard from screenplay</description>
+        <in-parameters>
+            <parameter name="screenplayId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="storyboard" type="Map"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Implementation will be added in subsequent tasks
+                storyboard = [:]
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- AI Video Generator Services -->
+    <service verb="generate" noun="VideoSegment">
+        <description>Generate video segment from shot specification</description>
+        <in-parameters>
+            <parameter name="shotId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="videoSegment" type="Map"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Implementation will be added in subsequent tasks
+                videoSegment = [:]
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Asset Library Services -->
+    <service verb="store" noun="Asset">
+        <description>Store asset in library</description>
+        <in-parameters>
+            <parameter name="assetType" type="String" required="true"/>
+            <parameter name="name" type="String" required="true"/>
+            <parameter name="filePath" type="String"/>
+            <parameter name="metadata" type="Map"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="assetId" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Implementation will be added in subsequent tasks
+                assetId = ec.entity.sequencedIdPrimary
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="search" noun="Assets">
+        <description>Search assets by criteria</description>
+        <in-parameters>
+            <parameter name="searchCriteria" type="Map"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="assets" type="List"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Implementation will be added in subsequent tasks
+                assets = []
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Workflow Orchestrator Services -->
+    <service verb="start" noun="ProcessingPipeline">
+        <description>Start processing pipeline for novel</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+            <parameter name="configuration" type="Map"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="pipelineId" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Implementation will be added in subsequent tasks
+                pipelineId = ec.entity.sequencedIdPrimary
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="monitor" noun="PipelineProgress">
+        <description>Monitor pipeline progress</description>
+        <in-parameters>
+            <parameter name="pipelineId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="status" type="Map"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Implementation will be added in subsequent tasks
+                status = [:]
+            ]]></script>
+        </actions>
+    </service>
+
+</services>

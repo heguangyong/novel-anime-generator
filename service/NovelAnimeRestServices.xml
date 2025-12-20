@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- REST API Services for Novel Anime Generator -->
+    
+    <service verb="get" noun="Novel" type="interface">
+        <description>Get novel by ID</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="novel" type="Map"/>
+        </out-parameters>
+    </service>
+    
+    <service verb="get" noun="Novel" type="entity-auto">
+        <description>Get novel by ID implementation</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="novel" type="Map"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Novel" value-field="novelValue"/>
+            <if condition="novelValue">
+                <entity-find entity-name="novel.anime.Chapter" list="chapterList">
+                    <econdition field-name="novelId" from="novelId"/>
+                    <order-by field-name="chapterNumber"/>
+                </entity-find>
+                
+                <set field="novel" from="[
+                    novelId: novelValue.novelId,
+                    title: novelValue.title,
+                    author: novelValue.author,
+                    wordCount: novelValue.wordCount,
+                    status: novelValue.status,
+                    createdDate: novelValue.createdDate,
+                    lastUpdated: novelValue.lastUpdated,
+                    chapters: chapterList.collect { [
+                        id: it.chapterId,
+                        title: it.title,
+                        content: it.content,
+                        wordCount: it.wordCount,
+                        scenes: []
+                    ] },
+                    metadata: [
+                        wordCount: novelValue.wordCount,
+                        language: 'auto-detected',
+                        description: 'Generated from uploaded novel'
+                    ]
+                ]"/>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Novels" type="interface">
+        <description>List all novels</description>
+        <out-parameters>
+            <parameter name="novels" type="List"/>
+        </out-parameters>
+    </service>
+    
+    <service verb="get" noun="Novels" type="entity-auto">
+        <description>List all novels implementation</description>
+        <out-parameters>
+            <parameter name="novels" type="List"/>
+        </out-parameters>
+        <actions>
+            <entity-find entity-name="novel.anime.Novel" list="novelList">
+                <order-by field-name="-createdDate"/>
+            </entity-find>
+            
+            <set field="novels" from="novelList.collect { [
+                novelId: it.novelId,
+                title: it.title,
+                author: it.author,
+                wordCount: it.wordCount,
+                status: it.status,
+                createdDate: it.createdDate
+            ] }"/>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="Novel" type="interface">
+        <description>Delete novel by ID</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+        </out-parameters>
+    </service>
+    
+    <service verb="delete" noun="Novel" type="entity-auto">
+        <description>Delete novel by ID implementation</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+        </out-parameters>
+        <actions>
+            <!-- Delete related chapters first -->
+            <entity-find entity-name="novel.anime.Chapter" list="chapterList">
+                <econdition field-name="novelId" from="novelId"/>
+            </entity-find>
+            <iterate list="chapterList" entry="chapter">
+                <!-- Delete related scenes -->
+                <entity-delete-by-condition entity-name="novel.anime.Scene">
+                    <econdition field-name="chapterId" from="chapter.chapterId"/>
+                </entity-delete-by-condition>
+                <!-- Delete chapter -->
+                <entity-delete value-field="chapter"/>
+            </iterate>
+            
+            <!-- Delete related characters -->
+            <entity-delete-by-condition entity-name="novel.anime.Character">
+                <econdition field-name="novelId" from="novelId"/>
+            </entity-delete-by-condition>
+            
+            <!-- Delete the novel -->
+            <entity-find-one entity-name="novel.anime.Novel" value-field="novelValue"/>
+            <if condition="novelValue">
+                <entity-delete value-field="novelValue"/>
+                <set field="success" value="true"/>
+                <else>
+                    <set field="success" value="false"/>
+                </else>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Novel" type="interface">
+        <description>Update novel metadata</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+            <parameter name="title" type="String"/>
+            <parameter name="author" type="String"/>
+            <parameter name="status" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+        </out-parameters>
+    </service>
+    
+    <service verb="update" noun="Novel" type="entity-auto">
+        <description>Update novel metadata implementation</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+            <parameter name="title" type="String"/>
+            <parameter name="author" type="String"/>
+            <parameter name="status" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Novel" value-field="novelValue"/>
+            <if condition="novelValue">
+                <if condition="title"><set field="novelValue.title" from="title"/></if>
+                <if condition="author"><set field="novelValue.author" from="author"/></if>
+                <if condition="status"><set field="novelValue.status" from="status"/></if>
+                <set field="novelValue.lastUpdated" from="ec.user.nowTimestamp"/>
+                <entity-update value-field="novelValue"/>
+                <set field="success" value="true"/>
+                <else>
+                    <set field="success" value="false"/>
+                </else>
+            </if>
+        </actions>
+    </service>
+
+</services>

@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<screen xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/xml-screen-3.xsd"
+        require-authentication="false" allow-extra-path="true" strict-variables="false">
+
+    <parameter name="novelId"/>
+    
+    <!-- Novel Parser Transitions -->
+    <transition name="validateNovelFile" method="post">
+        <service-call name="novel.anime.NovelAnimeServices.validate#NovelFile" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="parseNovel" method="post">
+        <service-call name="novel.anime.NovelAnimeServices.parse#Novel" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="novel" method="get">
+        <parameter name="novelId" from="sri.screenUrlInfo.extraPathNameList?.get(0)"/>
+        <service-call name="novel.anime.NovelAnimeRestServices.get#Novel" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="novel" method="delete">
+        <parameter name="novelId" from="sri.screenUrlInfo.extraPathNameList?.get(0)"/>
+        <service-call name="novel.anime.NovelAnimeRestServices.delete#Novel" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="novel" method="put">
+        <parameter name="novelId" from="sri.screenUrlInfo.extraPathNameList?.get(0)"/>
+        <service-call name="novel.anime.NovelAnimeRestServices.update#Novel" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="novels" method="get">
+        <service-call name="novel.anime.NovelAnimeRestServices.get#Novels" web-send-json-response="resultMap"/>
+    </transition>
+
+    <!-- Auth REST Transitions -->
+    <transition name="auth/register" method="post">
+        <service-call name="novel.anime.NovelAnimeAuthServices.register#User" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/login" method="post">
+        <service-call name="novel.anime.NovelAnimeAuthServices.login#User" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/validate" method="get">
+        <service-call name="novel.anime.NovelAnimeAuthServices.validate#Token" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/validate" method="post">
+        <service-call name="novel.anime.NovelAnimeAuthServices.validate#Token" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/logout" method="post">
+        <service-call name="novel.anime.NovelAnimeAuthServices.logout#User" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/refresh" method="post">
+        <service-call name="novel.anime.NovelAnimeAuthServices.refresh#Token" web-send-json-response="resultMap"/>
+    </transition>
+
+    <!-- GitHub OAuth Transitions (Requirements: 2.1.1) -->
+    <transition name="auth/oauth/github" method="post">
+        <service-call name="novel.anime.NovelAnimeAuthServices.login#WithGitHub" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/oauth/github/callback" method="get">
+        <service-call name="novel.anime.NovelAnimeAuthServices.handle#GitHubCallback" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/oauth/github/url" method="get">
+        <service-call name="novel.anime.NovelAnimeAuthServices.get#GitHubAuthUrl" web-send-json-response="resultMap"/>
+    </transition>
+
+    <!-- Google OAuth Transitions (Requirements: 2.2.1) -->
+    <transition name="auth/oauth/google" method="post">
+        <service-call name="novel.anime.NovelAnimeAuthServices.login#WithGoogle" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/oauth/google/callback" method="get">
+        <service-call name="novel.anime.NovelAnimeAuthServices.handle#GoogleCallback" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/oauth/google/url" method="get">
+        <service-call name="novel.anime.NovelAnimeAuthServices.get#GoogleAuthUrl" web-send-json-response="resultMap"/>
+    </transition>
+
+    <!-- WeChat OAuth Transitions (Requirements: 2.3.1) -->
+    <transition name="auth/wechat/qrcode" method="get">
+        <service-call name="novel.anime.NovelAnimeAuthServices.get#WeChatQRCode" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/wechat/status" method="get">
+        <parameter name="ticket" from="sri.screenUrlInfo.extraPathNameList?.get(0)"/>
+        <service-call name="novel.anime.NovelAnimeAuthServices.check#WeChatLoginStatus" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/oauth/wechat" method="post">
+        <service-call name="novel.anime.NovelAnimeAuthServices.login#WithWeChat" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="auth/oauth/wechat/callback" method="get">
+        <service-call name="novel.anime.NovelAnimeAuthServices.handle#WeChatCallback" web-send-json-response="resultMap"/>
+    </transition>
+
+    <!-- Credits REST Transitions -->
+    <transition name="credits/balance" method="get">
+        <service-call name="novel.anime.NovelAnimeCreditsServices.get#CreditsBalance" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="credits/consume" method="post">
+        <service-call name="novel.anime.NovelAnimeCreditsServices.consume#Credits" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="credits/history" method="get">
+        <service-call name="novel.anime.NovelAnimeCreditsServices.get#CreditsHistory" web-send-json-response="resultMap"/>
+    </transition>
+
+    <actions>
+        <script>
+            // Handle CORS for development
+            sri.response.setHeader("Access-Control-Allow-Origin", "*")
+            sri.response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+            sri.response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            
+            if (sri.requestMethod == "OPTIONS") {
+                sri.response.setStatus(200)
+                return
+            }
+        </script>
+    </actions>
+
+    <widgets>
+        <label text="Novel Anime Generator REST API"/>
+    </widgets>
+</screen>

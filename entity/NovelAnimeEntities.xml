@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<entities xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/entity-definition-3.xsd">
+    
+    <!-- Novel Structure Entities -->
+    <entity entity-name="Novel" package="novel.anime">
+        <field name="novelId" type="id" is-pk="true"/>
+        <field name="title" type="text-medium"/>
+        <field name="author" type="text-medium"/>
+        <field name="originalText" type="text-very-long"/>
+        <field name="wordCount" type="number-integer"/>
+        <field name="status" type="text-short"/>
+        <field name="createdDate" type="date-time"/>
+        <field name="lastUpdated" type="date-time"/>
+    </entity>
+
+    <entity entity-name="Chapter" package="novel.anime">
+        <field name="chapterId" type="id" is-pk="true"/>
+        <field name="novelId" type="id"/>
+        <field name="chapterNumber" type="number-integer"/>
+        <field name="title" type="text-medium"/>
+        <field name="content" type="text-very-long"/>
+        <field name="wordCount" type="number-integer"/>
+        <field name="createdDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.Novel"/>
+    </entity>
+
+    <entity entity-name="Scene" package="novel.anime">
+        <field name="sceneId" type="id" is-pk="true"/>
+        <field name="chapterId" type="id"/>
+        <field name="sceneNumber" type="number-integer"/>
+        <field name="content" type="text-very-long"/>
+        <field name="setting" type="text-medium"/>
+        <field name="mood" type="text-short"/>
+        <relationship type="one" related="novel.anime.Chapter"/>
+    </entity>
+
+    <!-- Character System Entities -->
+    <entity entity-name="Character" package="novel.anime">
+        <field name="characterId" type="id" is-pk="true"/>
+        <field name="novelId" type="id"/>
+        <field name="name" type="text-medium"/>
+        <field name="role" type="text-short"/> <!-- protagonist, antagonist, supporting, minor -->
+        <field name="description" type="text-long"/>
+        <field name="appearance" type="text-long"/>
+        <field name="personality" type="text-long"/>
+        <field name="isLocked" type="text-indicator"/>
+        <field name="createdDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.Novel"/>
+    </entity>
+
+    <entity entity-name="CharacterRelationship" package="novel.anime">
+        <field name="relationshipId" type="id" is-pk="true"/>
+        <field name="fromCharacterId" type="id"/>
+        <field name="toCharacterId" type="id"/>
+        <field name="relationshipType" type="text-short"/>
+        <field name="description" type="text-medium"/>
+        <relationship type="one" title="From" related="novel.anime.Character">
+            <key-map field-name="fromCharacterId" related="characterId"/>
+        </relationship>
+        <relationship type="one" title="To" related="novel.anime.Character">
+            <key-map field-name="toCharacterId" related="characterId"/>
+        </relationship>
+    </entity>
+
+    <entity entity-name="CharacterAppearance" package="novel.anime">
+        <field name="appearanceId" type="id" is-pk="true"/>
+        <field name="characterId" type="id"/>
+        <field name="sceneId" type="id"/>
+        <field name="description" type="text-medium"/>
+        <relationship type="one" related="novel.anime.Character"/>
+        <relationship type="one" related="novel.anime.Scene"/>
+    </entity>
+
+    <!-- Episode and Script Entities -->
+    <entity entity-name="Episode" package="novel.anime">
+        <field name="episodeId" type="id" is-pk="true"/>
+        <field name="novelId" type="id"/>
+        <field name="episodeNumber" type="number-integer"/>
+        <field name="title" type="text-medium"/>
+        <field name="summary" type="text-long"/>
+        <field name="duration" type="number-decimal"/>
+        <field name="status" type="text-short"/>
+        <field name="createdDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.Novel"/>
+    </entity>
+
+    <entity entity-name="EpisodeScene" package="novel.anime">
+        <field name="episodeSceneId" type="id" is-pk="true"/>
+        <field name="episodeId" type="id"/>
+        <field name="sceneId" type="id"/>
+        <field name="sequenceNumber" type="number-integer"/>
+        <relationship type="one" related="novel.anime.Episode"/>
+        <relationship type="one" related="novel.anime.Scene"/>
+    </entity>
+
+    <entity entity-name="Screenplay" package="novel.anime">
+        <field name="screenplayId" type="id" is-pk="true"/>
+        <field name="episodeId" type="id"/>
+        <field name="content" type="text-very-long"/>
+        <field name="format" type="text-short"/>
+        <field name="createdDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.Episode"/>
+    </entity>
+
+    <!-- Storyboard and Video Generation Entities -->
+    <entity entity-name="Storyboard" package="novel.anime">
+        <field name="storyboardId" type="id" is-pk="true"/>
+        <field name="episodeId" type="id"/>
+        <field name="totalDuration" type="number-decimal"/>
+        <field name="status" type="text-short"/>
+        <field name="createdDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.Episode"/>
+    </entity>
+
+    <entity entity-name="ShotSpecification" package="novel.anime">
+        <field name="shotId" type="id" is-pk="true"/>
+        <field name="storyboardId" type="id"/>
+        <field name="shotNumber" type="number-integer"/>
+        <field name="duration" type="number-decimal"/>
+        <field name="cameraAngle" type="text-short"/>
+        <field name="shotType" type="text-short"/>
+        <field name="visualDescription" type="text-long"/>
+        <field name="aiPrompt" type="text-long"/>
+        <field name="setting" type="text-medium"/>
+        <relationship type="one" related="novel.anime.Storyboard"/>
+    </entity>
+
+    <entity entity-name="VideoSegment" package="novel.anime">
+        <field name="videoSegmentId" type="id" is-pk="true"/>
+        <field name="shotId" type="id"/>
+        <field name="filePath" type="text-medium"/>
+        <field name="duration" type="number-decimal"/>
+        <field name="status" type="text-short"/>
+        <field name="generatedDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.ShotSpecification"/>
+    </entity>
+
+    <!-- Asset Library Entities -->
+    <entity entity-name="Asset" package="novel.anime">
+        <field name="assetId" type="id" is-pk="true"/>
+        <field name="assetType" type="text-short"/> <!-- character, scene, template -->
+        <field name="name" type="text-medium"/>
+        <field name="description" type="text-long"/>
+        <field name="filePath" type="text-medium"/>
+        <field name="metadata" type="text-very-long"/>
+        <field name="version" type="text-short"/>
+        <field name="isShared" type="text-indicator"/>
+        <field name="createdDate" type="date-time"/>
+    </entity>
+
+    <entity entity-name="AssetVersion" package="novel.anime">
+        <field name="versionId" type="id" is-pk="true"/>
+        <field name="assetId" type="id"/>
+        <field name="versionNumber" type="text-short"/>
+        <field name="filePath" type="text-medium"/>
+        <field name="changeDescription" type="text-medium"/>
+        <field name="createdDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.Asset"/>
+    </entity>
+
+    <!-- Workflow and Processing Entities -->
+    <entity entity-name="ProcessingPipeline" package="novel.anime">
+        <field name="pipelineId" type="id" is-pk="true"/>
+        <field name="novelId" type="id"/>
+        <field name="status" type="text-short"/>
+        <field name="currentStage" type="text-short"/>
+        <field name="configuration" type="text-very-long"/>
+        <field name="startedDate" type="date-time"/>
+        <field name="completedDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.Novel"/>
+    </entity>
+
+    <entity entity-name="ProcessingStage" package="novel.anime">
+        <field name="stageId" type="id" is-pk="true"/>
+        <field name="pipelineId" type="id"/>
+        <field name="stageName" type="text-short"/>
+        <field name="status" type="text-short"/>
+        <field name="progress" type="number-decimal"/>
+        <field name="errorMessage" type="text-long"/>
+        <field name="startedDate" type="date-time"/>
+        <field name="completedDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.ProcessingPipeline"/>
+    </entity>
+
+    <!-- User Authentication Entities -->
+    <entity entity-name="NovelAnimeUser" package="novel.anime.user">
+        <field name="userId" type="id" is-pk="true"/>
+        <field name="email" type="text-medium" not-null="true"/>
+        <field name="username" type="text-medium"/>
+        <field name="passwordHash" type="text-medium"/>
+        <field name="avatarUrl" type="text-medium"/>
+        <field name="credits" type="number-integer" default="500"/>
+        <field name="status" type="text-short" default="'active'"/>
+        <field name="authProvider" type="text-short" default="'local'"/>
+        <field name="createdDate" type="date-time"/>
+        <field name="lastLoginDate" type="date-time"/>
+        <index name="NAU_EMAIL_IDX" unique="true">
+            <index-field name="email"/>
+        </index>
+    </entity>
+
+    <!-- OAuth Account Linking Entity -->
+    <entity entity-name="UserOAuthAccount" package="novel.anime.user">
+        <field name="oauthAccountId" type="id" is-pk="true"/>
+        <field name="userId" type="id" not-null="true"/>
+        <field name="provider" type="text-short" not-null="true"/>
+        <field name="providerUserId" type="text-medium" not-null="true"/>
+        <field name="accessToken" type="text-medium"/>
+        <field name="refreshToken" type="text-medium"/>
+        <field name="tokenExpiry" type="date-time"/>
+        <field name="profileData" type="text-very-long"/>
+        <field name="createdDate" type="date-time"/>
+        <field name="lastUsedDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.user.NovelAnimeUser"/>
+        <index name="OAUTH_PROVIDER_USER_IDX" unique="true">
+            <index-field name="provider"/>
+            <index-field name="providerUserId"/>
+        </index>
+    </entity>
+
+    <!-- Credits Transaction Entity -->
+    <entity entity-name="CreditTransaction" package="novel.anime.user">
+        <field name="transactionId" type="id" is-pk="true"/>
+        <field name="userId" type="id" not-null="true"/>
+        <field name="amount" type="number-integer" not-null="true"/>
+        <field name="type" type="text-short" not-null="true"/>
+        <field name="operationType" type="text-medium"/>
+        <field name="description" type="text-medium"/>
+        <field name="balanceAfter" type="number-integer"/>
+        <field name="timestamp" type="date-time"/>
+        <relationship type="one" related="novel.anime.user.NovelAnimeUser"/>
+        <index name="CT_USER_TIMESTAMP_IDX">
+            <index-field name="userId"/>
+            <index-field name="timestamp"/>
+        </index>
+    </entity>
+
+</entities>

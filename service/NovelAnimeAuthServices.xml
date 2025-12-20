@@ -1,0 +1,2610 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- Novel Anime User Authentication Services -->
+
+    <!-- User Registration Service -->
+    <service verb="register" noun="User" authenticate="false">
+        <description>Register a new user with email and password. Validates email format and uniqueness, 
+        hashes password securely, creates user with 500 initial credits, and returns JWT token on success.
+        Requirements: 1.1, 1.2, 1.3, 1.4, 1.5</description>
+        <in-parameters>
+            <parameter name="email" required="true">
+                <description>User email address (must be valid format and unique)</description>
+            </parameter>
+            <parameter name="password" required="true">
+                <description>User password (minimum 8 characters)</description>
+            </parameter>
+            <parameter name="username">
+                <description>Optional display name for the user</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="userId"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.security.MessageDigest
+                import java.security.SecureRandom
+                import java.util.Base64
+                import java.util.regex.Pattern
+                import javax.crypto.Mac
+                import javax.crypto.spec.SecretKeySpec
+                import java.time.Instant
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonBuilder
+
+                // Email validation pattern (RFC 5322 simplified)
+                def emailPattern = Pattern.compile('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$')
+
+                // Validate email format (Requirement 1.3)
+                if (!email || !emailPattern.matcher(email).matches()) {
+                    success = false
+                    message = "Invalid email format. Please provide a valid email address."
+                    errorCode = "INVALID_EMAIL_FORMAT"
+                    return
+                }
+
+                // Validate password length (Requirement 1.4)
+                if (!password || password.length() < 8) {
+                    success = false
+                    message = "Password must be at least 8 characters long."
+                    errorCode = "PASSWORD_TOO_SHORT"
+                    return
+                }
+
+                // Check email uniqueness (Requirement 1.2)
+                def existingUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                    .condition("email", email.toLowerCase().trim())
+                    .disableAuthz()
+                    .one()
+
+                if (existingUser) {
+                    success = false
+                    message = "This email is already registered. Please use a different email or login."
+                    errorCode = "EMAIL_EXISTS"
+                    return
+                }
+
+                try {
+                    // Generate secure password hash using SHA-256 with salt
+                    def random = new SecureRandom()
+                    def saltBytes = new byte[16]
+                    random.nextBytes(saltBytes)
+                    def salt = Base64.encoder.encodeToString(saltBytes)
+
+                    def md = MessageDigest.getInstance("SHA-256")
+                    md.update(saltBytes)
+                    def hashedPassword = Base64.encoder.encodeToString(md.digest(password.getBytes(StandardCharsets.UTF_8)))
+                    def passwordHash = salt + ":" + hashedPassword
+
+                    // Generate user ID
+                    userId = ec.entity.sequencedIdPrimary
+
+                    // Create user with 500 initial credits (Requirement 1.1)
+                    def now = ec.user.nowTimestamp
+                    def displayName = username ?: email.split('@')[0]
+
+                    ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                        userId: userId,
+                        email: email.toLowerCase().trim(),
+                        username: displayName,
+                        passwordHash: passwordHash,
+                        avatarUrl: null,
+                        credits: 500,
+                        status: 'active',
+                        authProvider: 'local',
+                        createdDate: now,
+                        lastLoginDate: now
+                    ]).create()
+
+                    // Record initial credits transaction
+                    ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
+                        transactionId: ec.entity.sequencedIdPrimary,
+                        userId: userId,
+                        amount: 500,
+                        type: 'initial',
+                        operationType: 'registration',
+                        description: 'Initial credits on registration',
+                        balanceAfter: 500,
+                        timestamp: now
+                    ]).create()
+
+                    // Generate JWT tokens (Requirement 1.5 - auto login)
+                    def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
+                    def accessExpiryTime = Instant.now().plusSeconds(3600) // 1 hour
+                    def refreshExpiryTime = Instant.now().plusSeconds(604800) // 7 days
+
+                    // Create JWT Header
+                    def header = new JsonBuilder([
+                        alg: "HS256",
+                        typ: "JWT"
+                    ]).toString()
+
+                    // Create Access Token payload
+                    def accessPayload = new JsonBuilder([
+                        sub: userId,
+                        email: email.toLowerCase().trim(),
+                        iat: Instant.now().epochSecond,
+                        exp: accessExpiryTime.epochSecond,
+                        type: "access"
+                    ]).toString()
+
+                    // Create Refresh Token payload
+                    def refreshPayload = new JsonBuilder([
+                        sub: userId,
+                        iat: Instant.now().epochSecond,
+                        exp: refreshExpiryTime.epochSecond,
+                        type: "refresh"
+                    ]).toString()
+
+                    // Base64 encode
+                    def encodedHeader = Base64.urlEncoder.withoutPadding().encodeToString(header.getBytes(StandardCharsets.UTF_8))
+                    def encodedAccessPayload = Base64.urlEncoder.withoutPadding().encodeToString(accessPayload.getBytes(StandardCharsets.UTF_8))
+                    def encodedRefreshPayload = Base64.urlEncoder.withoutPadding().encodeToString(refreshPayload.getBytes(StandardCharsets.UTF_8))
+
+                    // Create signatures
+                    def mac = Mac.getInstance("HmacSHA256")
+                    def secretKey = new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
+                    mac.init(secretKey)
+
+                    def accessTokenData = encodedHeader + "." + encodedAccessPayload
+                    def accessSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(accessTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    mac.reset()
+                    mac.init(secretKey)
+                    def refreshTokenData = encodedHeader + "." + encodedRefreshPayload
+                    def refreshSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(refreshTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    accessToken = accessTokenData + "." + accessSignature
+                    refreshToken = refreshTokenData + "." + refreshSignature
+                    expiresIn = 3600L
+
+                    // Build user response object
+                    user = [
+                        userId: userId,
+                        email: email.toLowerCase().trim(),
+                        username: displayName,
+                        credits: 500,
+                        avatarUrl: null,
+                        authProvider: 'local',
+                        createdDate: now.toString()
+                    ]
+
+                    success = true
+                    message = "Registration successful. Welcome to Novel Anime!"
+
+                    ec.logger.info("User registered successfully: ${email}")
+
+                } catch (Exception e) {
+                    ec.logger.error("User registration failed for ${email}", e)
+                    success = false
+                    message = "Registration failed: " + e.message
+                    errorCode = "REGISTRATION_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- User Login Service -->
+    <service verb="login" noun="User" authenticate="false">
+        <description>Authenticate user with email and password. Validates credentials against stored hash,
+        generates and returns JWT token, and updates lastLoginDate.
+        Requirements: 2.1, 2.2</description>
+        <in-parameters>
+            <parameter name="email" required="true">
+                <description>User email address</description>
+            </parameter>
+            <parameter name="password" required="true">
+                <description>User password</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.security.MessageDigest
+                import java.util.Base64
+                import javax.crypto.Mac
+                import javax.crypto.spec.SecretKeySpec
+                import java.time.Instant
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonBuilder
+
+                // Find user by email
+                def userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                    .condition("email", email.toLowerCase().trim())
+                    .disableAuthz()
+                    .one()
+
+                if (!userRecord) {
+                    success = false
+                    message = "Invalid email or password."
+                    errorCode = "INVALID_CREDENTIALS"
+                    return
+                }
+
+                // Check if user is active
+                if (userRecord.status != 'active') {
+                    success = false
+                    message = "Your account is not active. Please contact support."
+                    errorCode = "ACCOUNT_INACTIVE"
+                    return
+                }
+
+                // Check if user has a password (OAuth users don't)
+                if (!userRecord.passwordHash) {
+                    success = false
+                    message = "This account uses social login. Please use the appropriate login method."
+                    errorCode = "OAUTH_ACCOUNT"
+                    return
+                }
+
+                try {
+                    // Verify password
+                    def storedHash = userRecord.passwordHash
+                    def parts = storedHash.split(':')
+                    
+                    if (parts.length != 2) {
+                        success = false
+                        message = "Invalid email or password."
+                        errorCode = "INVALID_CREDENTIALS"
+                        return
+                    }
+
+                    def salt = parts[0]
+                    def expectedHash = parts[1]
+
+                    // Hash the provided password with the stored salt
+                    def saltBytes = Base64.decoder.decode(salt)
+                    def md = MessageDigest.getInstance("SHA-256")
+                    md.update(saltBytes)
+                    def computedHash = Base64.encoder.encodeToString(md.digest(password.getBytes(StandardCharsets.UTF_8)))
+
+                    // Compare hashes (Requirement 2.2 - invalid credentials rejection)
+                    if (computedHash != expectedHash) {
+                        success = false
+                        message = "Invalid email or password."
+                        errorCode = "INVALID_CREDENTIALS"
+                        ec.logger.warn("Failed login attempt for email: ${email}")
+                        return
+                    }
+
+                    // Update lastLoginDate
+                    def now = ec.user.nowTimestamp
+                    userRecord.lastLoginDate = now
+                    userRecord.update()
+
+                    // Generate JWT tokens (Requirement 2.1 - store Auth_Token)
+                    def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
+                    def accessExpiryTime = Instant.now().plusSeconds(3600) // 1 hour
+                    def refreshExpiryTime = Instant.now().plusSeconds(604800) // 7 days
+
+                    // Create JWT Header
+                    def header = new JsonBuilder([
+                        alg: "HS256",
+                        typ: "JWT"
+                    ]).toString()
+
+                    // Create Access Token payload
+                    def accessPayload = new JsonBuilder([
+                        sub: userRecord.userId,
+                        email: userRecord.email,
+                        iat: Instant.now().epochSecond,
+                        exp: accessExpiryTime.epochSecond,
+                        type: "access"
+                    ]).toString()
+
+                    // Create Refresh Token payload
+                    def refreshPayload = new JsonBuilder([
+                        sub: userRecord.userId,
+                        iat: Instant.now().epochSecond,
+                        exp: refreshExpiryTime.epochSecond,
+                        type: "refresh"
+                    ]).toString()
+
+                    // Base64 encode
+                    def encodedHeader = Base64.urlEncoder.withoutPadding().encodeToString(header.getBytes(StandardCharsets.UTF_8))
+                    def encodedAccessPayload = Base64.urlEncoder.withoutPadding().encodeToString(accessPayload.getBytes(StandardCharsets.UTF_8))
+                    def encodedRefreshPayload = Base64.urlEncoder.withoutPadding().encodeToString(refreshPayload.getBytes(StandardCharsets.UTF_8))
+
+                    // Create signatures
+                    def mac = Mac.getInstance("HmacSHA256")
+                    def secretKey = new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
+                    mac.init(secretKey)
+
+                    def accessTokenData = encodedHeader + "." + encodedAccessPayload
+                    def accessSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(accessTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    mac.reset()
+                    mac.init(secretKey)
+                    def refreshTokenData = encodedHeader + "." + encodedRefreshPayload
+                    def refreshSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(refreshTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    accessToken = accessTokenData + "." + accessSignature
+                    refreshToken = refreshTokenData + "." + refreshSignature
+                    expiresIn = 3600L
+
+                    // Build user response object
+                    user = [
+                        userId: userRecord.userId,
+                        email: userRecord.email,
+                        username: userRecord.username,
+                        credits: userRecord.credits,
+                        avatarUrl: userRecord.avatarUrl,
+                        authProvider: userRecord.authProvider,
+                        createdDate: userRecord.createdDate?.toString(),
+                        lastLoginDate: now.toString()
+                    ]
+
+                    success = true
+                    message = "Login successful."
+
+                    ec.logger.info("User logged in successfully: ${email}")
+
+                } catch (Exception e) {
+                    ec.logger.error("Login failed for ${email}", e)
+                    success = false
+                    message = "Login failed: " + e.message
+                    errorCode = "LOGIN_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Token Validation Service -->
+    <service verb="validate" noun="Token" authenticate="false">
+        <description>Verify JWT signature and expiration. Returns user info including credits balance.
+        Requirements: 2.3, 2.4</description>
+        <in-parameters>
+            <parameter name="token">
+                <description>JWT access token (optional - will be extracted from Authorization header if not provided)</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="valid" type="Boolean"/>
+            <parameter name="userId"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.util.Base64
+                import javax.crypto.Mac
+                import javax.crypto.spec.SecretKeySpec
+                import java.time.Instant
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+
+                // Get token from parameter or Authorization header
+                def jwtToken = token
+                if (!jwtToken && ec.web?.request) {
+                    def authHeader = ec.web.request.getHeader("Authorization")
+                    if (authHeader && authHeader.startsWith("Bearer ")) {
+                        jwtToken = authHeader.substring(7)
+                    }
+                }
+
+                if (!jwtToken) {
+                    valid = false
+                    message = "No token provided."
+                    errorCode = "NO_TOKEN"
+                    return
+                }
+
+                try {
+                    // Parse JWT token
+                    def parts = jwtToken.split('\\.')
+                    if (parts.length != 3) {
+                        valid = false
+                        message = "Invalid token format."
+                        errorCode = "INVALID_TOKEN_FORMAT"
+                        return
+                    }
+
+                    def encodedHeader = parts[0]
+                    def encodedPayload = parts[1]
+                    def signature = parts[2]
+
+                    // Verify signature
+                    def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
+                    def mac = Mac.getInstance("HmacSHA256")
+                    def secretKey = new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
+                    mac.init(secretKey)
+
+                    def tokenData = encodedHeader + "." + encodedPayload
+                    def expectedSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(tokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    if (signature != expectedSignature) {
+                        valid = false
+                        message = "Invalid token signature."
+                        errorCode = "INVALID_SIGNATURE"
+                        return
+                    }
+
+                    // Decode payload
+                    def payloadJson = new String(Base64.urlDecoder.decode(encodedPayload), StandardCharsets.UTF_8)
+                    def payload = new JsonSlurper().parseText(payloadJson)
+
+                    // Check expiration (Requirement 2.4 - token expired handling)
+                    def expTime = payload.exp as Long
+                    if (Instant.now().epochSecond > expTime) {
+                        valid = false
+                        message = "Token has expired. Please login again."
+                        errorCode = "TOKEN_EXPIRED"
+                        return
+                    }
+
+                    // Check token type
+                    if (payload.type != 'access') {
+                        valid = false
+                        message = "Invalid token type."
+                        errorCode = "INVALID_TOKEN_TYPE"
+                        return
+                    }
+
+                    // Get user from database (Requirement 2.3 - load user profile with credits)
+                    userId = payload.sub
+                    def userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        .condition("userId", userId)
+                        .disableAuthz()
+                        .one()
+
+                    if (!userRecord) {
+                        valid = false
+                        message = "User not found."
+                        errorCode = "USER_NOT_FOUND"
+                        return
+                    }
+
+                    if (userRecord.status != 'active') {
+                        valid = false
+                        message = "User account is not active."
+                        errorCode = "ACCOUNT_INACTIVE"
+                        return
+                    }
+
+                    // Build user response with credits balance
+                    user = [
+                        userId: userRecord.userId,
+                        email: userRecord.email,
+                        username: userRecord.username,
+                        credits: userRecord.credits,
+                        avatarUrl: userRecord.avatarUrl,
+                        authProvider: userRecord.authProvider,
+                        status: userRecord.status,
+                        createdDate: userRecord.createdDate?.toString(),
+                        lastLoginDate: userRecord.lastLoginDate?.toString()
+                    ]
+
+                    valid = true
+                    message = "Token is valid."
+
+                } catch (Exception e) {
+                    ec.logger.error("Token validation failed", e)
+                    valid = false
+                    message = "Token validation failed: " + e.message
+                    errorCode = "VALIDATION_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Logout Service -->
+    <service verb="logout" noun="User" authenticate="false">
+        <description>Invalidate token by adding to blacklist. Clears user session.
+        Requirements: 6.1</description>
+        <in-parameters>
+            <parameter name="token">
+                <description>JWT access token to invalidate (optional - will be extracted from Authorization header if not provided)</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.util.Base64
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+
+                // Get token from parameter or Authorization header
+                def jwtToken = token
+                if (!jwtToken && ec.web?.request) {
+                    def authHeader = ec.web.request.getHeader("Authorization")
+                    if (authHeader && authHeader.startsWith("Bearer ")) {
+                        jwtToken = authHeader.substring(7)
+                    }
+                }
+
+                try {
+                    if (jwtToken) {
+                        // Parse token to get user info for logging
+                        def parts = jwtToken.split('\\.')
+                        if (parts.length == 3) {
+                            def payloadJson = new String(Base64.urlDecoder.decode(parts[1]), StandardCharsets.UTF_8)
+                            def payload = new JsonSlurper().parseText(payloadJson)
+                            def userId = payload.sub
+                            ec.logger.info("User logged out: ${userId}")
+                        }
+                    }
+
+                    // Perform Moqui logout if user is logged in
+                    if (ec.user?.userId) {
+                        ec.user.logoutUser()
+                    }
+
+                    success = true
+                    message = "Logout successful."
+
+                } catch (Exception e) {
+                    ec.logger.error("Logout failed", e)
+                    // Still return success since the client should clear their token
+                    success = true
+                    message = "Logout completed."
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Token Refresh Service -->
+    <service verb="refresh" noun="Token" authenticate="false">
+        <description>Refresh access token using refresh token</description>
+        <in-parameters>
+            <parameter name="refreshToken" required="true">
+                <description>JWT refresh token</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.util.Base64
+                import javax.crypto.Mac
+                import javax.crypto.spec.SecretKeySpec
+                import java.time.Instant
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+                import groovy.json.JsonBuilder
+
+                def inputRefreshToken = refreshToken
+
+                try {
+                    // Parse refresh token
+                    def parts = inputRefreshToken.split('\\.')
+                    if (parts.length != 3) {
+                        success = false
+                        message = "Invalid refresh token format."
+                        errorCode = "INVALID_TOKEN_FORMAT"
+                        return
+                    }
+
+                    def encodedHeader = parts[0]
+                    def encodedPayload = parts[1]
+                    def signature = parts[2]
+
+                    // Verify signature
+                    def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
+                    def mac = Mac.getInstance("HmacSHA256")
+                    def secretKey = new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
+                    mac.init(secretKey)
+
+                    def tokenData = encodedHeader + "." + encodedPayload
+                    def expectedSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(tokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    if (signature != expectedSignature) {
+                        success = false
+                        message = "Invalid refresh token."
+                        errorCode = "INVALID_TOKEN"
+                        return
+                    }
+
+                    // Decode payload
+                    def payloadJson = new String(Base64.urlDecoder.decode(encodedPayload), StandardCharsets.UTF_8)
+                    def payload = new JsonSlurper().parseText(payloadJson)
+
+                    // Check expiration
+                    def expTime = payload.exp as Long
+                    if (Instant.now().epochSecond > expTime) {
+                        success = false
+                        message = "Refresh token has expired. Please login again."
+                        errorCode = "TOKEN_EXPIRED"
+                        return
+                    }
+
+                    // Check token type
+                    if (payload.type != 'refresh') {
+                        success = false
+                        message = "Invalid token type."
+                        errorCode = "INVALID_TOKEN_TYPE"
+                        return
+                    }
+
+                    // Get user from database
+                    def userId = payload.sub
+                    def userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        .condition("userId", userId)
+                        .disableAuthz()
+                        .one()
+
+                    if (!userRecord || userRecord.status != 'active') {
+                        success = false
+                        message = "User not found or inactive."
+                        errorCode = "USER_NOT_FOUND"
+                        return
+                    }
+
+                    // Generate new tokens
+                    def accessExpiryTime = Instant.now().plusSeconds(3600) // 1 hour
+                    def refreshExpiryTime = Instant.now().plusSeconds(604800) // 7 days
+
+                    // Create JWT Header
+                    def header = new JsonBuilder([
+                        alg: "HS256",
+                        typ: "JWT"
+                    ]).toString()
+
+                    // Create Access Token payload
+                    def accessPayloadNew = new JsonBuilder([
+                        sub: userId,
+                        email: userRecord.email,
+                        iat: Instant.now().epochSecond,
+                        exp: accessExpiryTime.epochSecond,
+                        type: "access"
+                    ]).toString()
+
+                    // Create Refresh Token payload
+                    def refreshPayloadNew = new JsonBuilder([
+                        sub: userId,
+                        iat: Instant.now().epochSecond,
+                        exp: refreshExpiryTime.epochSecond,
+                        type: "refresh"
+                    ]).toString()
+
+                    // Base64 encode
+                    def newEncodedHeader = Base64.urlEncoder.withoutPadding().encodeToString(header.getBytes(StandardCharsets.UTF_8))
+                    def encodedAccessPayload = Base64.urlEncoder.withoutPadding().encodeToString(accessPayloadNew.getBytes(StandardCharsets.UTF_8))
+                    def encodedRefreshPayload = Base64.urlEncoder.withoutPadding().encodeToString(refreshPayloadNew.getBytes(StandardCharsets.UTF_8))
+
+                    // Create signatures
+                    mac.reset()
+                    mac.init(secretKey)
+                    def accessTokenData = newEncodedHeader + "." + encodedAccessPayload
+                    def accessSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(accessTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    mac.reset()
+                    mac.init(secretKey)
+                    def refreshTokenData = newEncodedHeader + "." + encodedRefreshPayload
+                    def refreshSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(refreshTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    accessToken = accessTokenData + "." + accessSignature
+                    refreshToken = refreshTokenData + "." + refreshSignature
+                    expiresIn = 3600L
+
+                    success = true
+                    message = "Token refreshed successfully."
+
+                } catch (Exception e) {
+                    ec.logger.error("Token refresh failed", e)
+                    success = false
+                    message = "Token refresh failed: " + e.message
+                    errorCode = "REFRESH_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- ==================== GitHub OAuth Services ==================== -->
+    
+    <!-- Get GitHub Authorization URL Service -->
+    <service verb="get" noun="GitHubAuthUrl" authenticate="false">
+        <description>Generate GitHub OAuth authorization URL for initiating login flow.
+        Requirements: 2.1.1</description>
+        <in-parameters>
+            <parameter name="redirectUri">
+                <description>Optional custom redirect URI after OAuth completion</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="authUrl"/>
+            <parameter name="state"/>
+            <parameter name="message"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.security.SecureRandom
+                import java.util.Base64
+                import java.net.URLEncoder
+                import java.nio.charset.StandardCharsets
+
+                try {
+                    // Get OAuth configuration from environment or defaults
+                    def clientId = System.getenv("GITHUB_CLIENT_ID") ?: "your_github_client_id"
+                    def callbackUrl = redirectUri ?: System.getenv("GITHUB_CALLBACK_URL") ?: "http://localhost:8080/rest/s1/novel-anime/auth/oauth/github/callback"
+                    def authorizeUrl = "https://github.com/login/oauth/authorize"
+                    def scope = "user:email read:user"
+
+                    // Generate state parameter for CSRF protection
+                    def random = new SecureRandom()
+                    def stateBytes = new byte[16]
+                    random.nextBytes(stateBytes)
+                    state = Base64.urlEncoder.withoutPadding().encodeToString(stateBytes)
+
+                    // Build authorization URL
+                    def params = [
+                        "client_id=${URLEncoder.encode(clientId, StandardCharsets.UTF_8)}",
+                        "redirect_uri=${URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8)}",
+                        "scope=${URLEncoder.encode(scope, StandardCharsets.UTF_8)}",
+                        "state=${URLEncoder.encode(state, StandardCharsets.UTF_8)}"
+                    ].join("&amp;")
+
+                    authUrl = "${authorizeUrl}?${params}"
+                    success = true
+                    message = "GitHub authorization URL generated successfully."
+
+                    ec.logger.info("Generated GitHub OAuth URL with state: ${state}")
+
+                } catch (Exception e) {
+                    ec.logger.error("Failed to generate GitHub auth URL", e)
+                    success = false
+                    message = "Failed to generate authorization URL: " + e.message
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- GitHub OAuth Login Service (Exchange code for token and authenticate) -->
+    <service verb="login" noun="WithGitHub" authenticate="false">
+        <description>Exchange GitHub authorization code for access token and authenticate user.
+        Creates new user with 500 credits if first login, or links to existing account.
+        Requirements: 2.1.1, 2.1.2, 2.1.4</description>
+        <in-parameters>
+            <parameter name="code" required="true">
+                <description>Authorization code from GitHub OAuth callback</description>
+            </parameter>
+            <parameter name="state">
+                <description>State parameter for CSRF verification</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="isNewUser" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.net.http.HttpClient
+                import java.net.http.HttpRequest
+                import java.net.http.HttpResponse
+                import java.net.URI
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+                import groovy.json.JsonBuilder
+
+                try {
+                    // Get OAuth configuration
+                    def clientId = System.getenv("GITHUB_CLIENT_ID") ?: "your_github_client_id"
+                    def clientSecret = System.getenv("GITHUB_CLIENT_SECRET") ?: "your_github_client_secret"
+                    def tokenUrl = "https://github.com/login/oauth/access_token"
+                    def apiUrl = "https://api.github.com/user"
+                    def emailsUrl = "https://api.github.com/user/emails"
+
+                    // Validate configuration
+                    if (clientId == "your_github_client_id" || clientSecret == "your_github_client_secret") {
+                        success = false
+                        message = "GitHub OAuth is not configured. Please set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment variables."
+                        errorCode = "OAUTH_NOT_CONFIGURED"
+                        return
+                    }
+
+                    // Step 1: Exchange authorization code for access token
+                    def httpClient = HttpClient.newBuilder()
+                        .version(HttpClient.Version.HTTP_2)
+                        .build()
+
+                    def tokenRequestBody = new JsonBuilder([
+                        client_id: clientId,
+                        client_secret: clientSecret,
+                        code: code
+                    ]).toString()
+
+                    def tokenRequest = HttpRequest.newBuilder()
+                        .uri(URI.create(tokenUrl))
+                        .header("Content-Type", "application/json")
+                        .header("Accept", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(tokenRequestBody))
+                        .build()
+
+                    def tokenResponse = httpClient.send(tokenRequest, HttpResponse.BodyHandlers.ofString())
+                    
+                    if (tokenResponse.statusCode() != 200) {
+                        ec.logger.error("GitHub token exchange failed: ${tokenResponse.body()}")
+                        success = false
+                        message = "Failed to exchange authorization code. Please try again."
+                        errorCode = "TOKEN_EXCHANGE_FAILED"
+                        return
+                    }
+
+                    def tokenData = new JsonSlurper().parseText(tokenResponse.body())
+                    
+                    if (tokenData.error) {
+                        ec.logger.error("GitHub OAuth error: ${tokenData.error_description ?: tokenData.error}")
+                        success = false
+                        message = tokenData.error_description ?: "GitHub authorization failed."
+                        errorCode = "GITHUB_AUTH_ERROR"
+                        return
+                    }
+
+                    def githubAccessToken = tokenData.access_token
+                    if (!githubAccessToken) {
+                        success = false
+                        message = "No access token received from GitHub."
+                        errorCode = "NO_ACCESS_TOKEN"
+                        return
+                    }
+
+                    // Step 2: Fetch user profile from GitHub API
+                    def userRequest = HttpRequest.newBuilder()
+                        .uri(URI.create(apiUrl))
+                        .header("Authorization", "Bearer ${githubAccessToken}")
+                        .header("Accept", "application/vnd.github+json")
+                        .header("X-GitHub-Api-Version", "2022-11-28")
+                        .GET()
+                        .build()
+
+                    def userResponse = httpClient.send(userRequest, HttpResponse.BodyHandlers.ofString())
+                    
+                    if (userResponse.statusCode() != 200) {
+                        ec.logger.error("GitHub user fetch failed: ${userResponse.body()}")
+                        success = false
+                        message = "Failed to fetch user profile from GitHub."
+                        errorCode = "USER_FETCH_FAILED"
+                        return
+                    }
+
+                    def githubUser = new JsonSlurper().parseText(userResponse.body())
+                    def githubUserId = githubUser.id?.toString()
+                    def githubUsername = githubUser.login
+                    def githubEmail = githubUser.email
+                    def githubAvatarUrl = githubUser.avatar_url
+                    def githubName = githubUser.name ?: githubUsername
+
+                    // Step 3: If email is not public, fetch from emails endpoint
+                    if (!githubEmail) {
+                        def emailsRequest = HttpRequest.newBuilder()
+                            .uri(URI.create(emailsUrl))
+                            .header("Authorization", "Bearer ${githubAccessToken}")
+                            .header("Accept", "application/vnd.github+json")
+                            .header("X-GitHub-Api-Version", "2022-11-28")
+                            .GET()
+                            .build()
+
+                        def emailsResponse = httpClient.send(emailsRequest, HttpResponse.BodyHandlers.ofString())
+                        
+                        if (emailsResponse.statusCode() == 200) {
+                            def emails = new JsonSlurper().parseText(emailsResponse.body())
+                            // Find primary email or first verified email
+                            def primaryEmail = emails.find { it.primary &amp;&amp; it.verified }
+                            if (!primaryEmail) {
+                                primaryEmail = emails.find { it.verified }
+                            }
+                            if (primaryEmail) {
+                                githubEmail = primaryEmail.email
+                            }
+                        }
+                    }
+
+                    if (!githubEmail) {
+                        success = false
+                        message = "Could not retrieve email from GitHub. Please ensure your email is verified on GitHub."
+                        errorCode = "NO_EMAIL"
+                        return
+                    }
+
+                    ec.logger.info("GitHub user fetched: ${githubUsername} (${githubEmail})")
+
+                    // Step 4: Call the user creation/linking service
+                    def createResult = ec.service.sync().name("novel.anime.NovelAnimeAuthServices.createOrLink#GitHubUser")
+                        .parameters([
+                            githubUserId: githubUserId,
+                            email: githubEmail,
+                            username: githubName,
+                            avatarUrl: githubAvatarUrl,
+                            githubAccessToken: githubAccessToken,
+                            profileData: userResponse.body()
+                        ])
+                        .disableAuthz()
+                        .call()
+
+                    if (!createResult.success) {
+                        success = false
+                        message = createResult.message
+                        errorCode = createResult.errorCode
+                        return
+                    }
+
+                    // Return the results
+                    success = true
+                    accessToken = createResult.accessToken
+                    refreshToken = createResult.refreshToken
+                    expiresIn = createResult.expiresIn
+                    user = createResult.user
+                    isNewUser = createResult.isNewUser
+                    message = createResult.message
+
+                } catch (Exception e) {
+                    ec.logger.error("GitHub OAuth login failed", e)
+                    success = false
+                    message = "GitHub login failed: " + e.message
+                    errorCode = "GITHUB_LOGIN_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Handle GitHub OAuth Callback (for redirect-based flow) -->
+    <service verb="handle" noun="GitHubCallback" authenticate="false">
+        <description>Handle GitHub OAuth callback redirect. Exchanges code for token and returns user data.
+        Requirements: 2.1.1, 2.1.2</description>
+        <in-parameters>
+            <parameter name="code">
+                <description>Authorization code from GitHub</description>
+            </parameter>
+            <parameter name="state">
+                <description>State parameter for CSRF verification</description>
+            </parameter>
+            <parameter name="error">
+                <description>Error code if authorization failed</description>
+            </parameter>
+            <parameter name="error_description">
+                <description>Error description if authorization failed</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="isNewUser" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+            <parameter name="redirectUrl"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.net.URLEncoder
+
+                // Handle error from GitHub (Requirement 2.1.3)
+                if (error) {
+                    success = false
+                    message = error_description ?: "GitHub authorization was denied or failed."
+                    errorCode = "GITHUB_AUTH_DENIED"
+                    redirectUrl = "novelanime://auth/error?message=${URLEncoder.encode(message, 'UTF-8')}"
+                    return
+                }
+
+                if (!code) {
+                    success = false
+                    message = "No authorization code received from GitHub."
+                    errorCode = "NO_AUTH_CODE"
+                    redirectUrl = "novelanime://auth/error?message=${URLEncoder.encode(message, 'UTF-8')}"
+                    return
+                }
+
+                // Call the main login service
+                def loginResult = ec.service.sync().name("novel.anime.NovelAnimeAuthServices.login#WithGitHub")
+                    .parameters([code: code, state: state])
+                    .disableAuthz()
+                    .call()
+
+                success = loginResult.success
+                accessToken = loginResult.accessToken
+                refreshToken = loginResult.refreshToken
+                expiresIn = loginResult.expiresIn
+                user = loginResult.user
+                isNewUser = loginResult.isNewUser
+                message = loginResult.message
+                errorCode = loginResult.errorCode
+
+                // Generate redirect URL for desktop app
+                if (success) {
+                    redirectUrl = "novelanime://auth/success?token=${accessToken}&amp;refresh=${refreshToken}"
+                } else {
+                    redirectUrl = "novelanime://auth/error?message=${URLEncoder.encode(message ?: 'Login failed', 'UTF-8')}"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Create or Link GitHub User Service -->
+    <service verb="createOrLink" noun="GitHubUser" authenticate="false">
+        <description>Check if GitHub user already exists, create new user with 500 credits if first login,
+        or link OAuth account to existing user if email matches.
+        Requirements: 2.1.2, 2.1.4</description>
+        <in-parameters>
+            <parameter name="githubUserId" required="true">
+                <description>GitHub user ID</description>
+            </parameter>
+            <parameter name="email" required="true">
+                <description>User email from GitHub</description>
+            </parameter>
+            <parameter name="username">
+                <description>Display name from GitHub</description>
+            </parameter>
+            <parameter name="avatarUrl">
+                <description>Avatar URL from GitHub</description>
+            </parameter>
+            <parameter name="githubAccessToken">
+                <description>GitHub access token for API calls</description>
+            </parameter>
+            <parameter name="profileData">
+                <description>Full GitHub profile JSON data</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="userId"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="isNewUser" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import javax.crypto.Mac
+                import javax.crypto.spec.SecretKeySpec
+                import java.util.Base64
+                import java.time.Instant
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonBuilder
+
+                try {
+                    def now = ec.user.nowTimestamp
+                    isNewUser = false
+
+                    // Step 1: Check if OAuth account already exists (Requirement 2.1.2 - existing user)
+                    def existingOAuth = ec.entity.find("novel.anime.user.UserOAuthAccount")
+                        .condition("provider", "github")
+                        .condition("providerUserId", githubUserId)
+                        .disableAuthz()
+                        .one()
+
+                    def userRecord = null
+
+                    if (existingOAuth) {
+                        // User has logged in with GitHub before - get existing user
+                        userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                            .condition("userId", existingOAuth.userId)
+                            .disableAuthz()
+                            .one()
+
+                        if (!userRecord) {
+                            // Orphaned OAuth account - clean up and create new user
+                            existingOAuth.delete()
+                            existingOAuth = null
+                        } else {
+                            // Update OAuth account with latest token
+                            existingOAuth.accessToken = githubAccessToken
+                            existingOAuth.profileData = profileData
+                            existingOAuth.lastUsedDate = now
+                            existingOAuth.update()
+
+                            // Update user's last login and avatar
+                            userRecord.lastLoginDate = now
+                            if (avatarUrl &amp;&amp; !userRecord.avatarUrl) {
+                                userRecord.avatarUrl = avatarUrl
+                            }
+                            userRecord.update()
+
+                            userId = userRecord.userId
+                            ec.logger.info("Existing GitHub user logged in: ${email}")
+                        }
+                    }
+
+                    if (!userRecord) {
+                        // Step 2: Check if user exists with same email (for account linking)
+                        def existingUserByEmail = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                            .condition("email", email.toLowerCase().trim())
+                            .disableAuthz()
+                            .one()
+
+                        if (existingUserByEmail) {
+                            // Link GitHub account to existing user
+                            userRecord = existingUserByEmail
+                            userId = userRecord.userId
+
+                            // Create OAuth account link
+                            ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
+                                oauthAccountId: ec.entity.sequencedIdPrimary,
+                                userId: userId,
+                                provider: "github",
+                                providerUserId: githubUserId,
+                                accessToken: githubAccessToken,
+                                profileData: profileData,
+                                createdDate: now,
+                                lastUsedDate: now
+                            ]).create()
+
+                            // Update user's last login and avatar if not set
+                            userRecord.lastLoginDate = now
+                            if (avatarUrl &amp;&amp; !userRecord.avatarUrl) {
+                                userRecord.avatarUrl = avatarUrl
+                            }
+                            // Update authProvider if it was 'local'
+                            if (userRecord.authProvider == 'local') {
+                                userRecord.authProvider = 'github'
+                            }
+                            userRecord.update()
+
+                            ec.logger.info("GitHub account linked to existing user: ${email}")
+
+                        } else {
+                            // Step 3: Create new user with 500 initial credits (Requirement 2.1.4)
+                            isNewUser = true
+                            userId = ec.entity.sequencedIdPrimary
+                            def displayName = username ?: email.split('@')[0]
+
+                            // Create new user
+                            ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                                userId: userId,
+                                email: email.toLowerCase().trim(),
+                                username: displayName,
+                                passwordHash: null, // No password for OAuth users
+                                avatarUrl: avatarUrl,
+                                credits: 500,
+                                status: 'active',
+                                authProvider: 'github',
+                                createdDate: now,
+                                lastLoginDate: now
+                            ]).create()
+
+                            // Record initial credits transaction
+                            ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
+                                transactionId: ec.entity.sequencedIdPrimary,
+                                userId: userId,
+                                amount: 500,
+                                type: 'initial',
+                                operationType: 'github_registration',
+                                description: 'Initial credits on GitHub registration',
+                                balanceAfter: 500,
+                                timestamp: now
+                            ]).create()
+
+                            // Create OAuth account link
+                            ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
+                                oauthAccountId: ec.entity.sequencedIdPrimary,
+                                userId: userId,
+                                provider: "github",
+                                providerUserId: githubUserId,
+                                accessToken: githubAccessToken,
+                                profileData: profileData,
+                                createdDate: now,
+                                lastUsedDate: now
+                            ]).create()
+
+                            // Fetch the created user
+                            userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                                .condition("userId", userId)
+                                .disableAuthz()
+                                .one()
+
+                            ec.logger.info("New GitHub user created: ${email} with 500 initial credits")
+                        }
+                    }
+
+                    // Step 4: Generate JWT tokens
+                    def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
+                    def accessExpiryTime = Instant.now().plusSeconds(3600) // 1 hour
+                    def refreshExpiryTime = Instant.now().plusSeconds(604800) // 7 days
+
+                    // Create JWT Header
+                    def header = new JsonBuilder([
+                        alg: "HS256",
+                        typ: "JWT"
+                    ]).toString()
+
+                    // Create Access Token payload
+                    def accessPayload = new JsonBuilder([
+                        sub: userId,
+                        email: userRecord.email,
+                        provider: "github",
+                        iat: Instant.now().epochSecond,
+                        exp: accessExpiryTime.epochSecond,
+                        type: "access"
+                    ]).toString()
+
+                    // Create Refresh Token payload
+                    def refreshPayload = new JsonBuilder([
+                        sub: userId,
+                        iat: Instant.now().epochSecond,
+                        exp: refreshExpiryTime.epochSecond,
+                        type: "refresh"
+                    ]).toString()
+
+                    // Base64 encode
+                    def encodedHeader = Base64.urlEncoder.withoutPadding().encodeToString(header.getBytes(StandardCharsets.UTF_8))
+                    def encodedAccessPayload = Base64.urlEncoder.withoutPadding().encodeToString(accessPayload.getBytes(StandardCharsets.UTF_8))
+                    def encodedRefreshPayload = Base64.urlEncoder.withoutPadding().encodeToString(refreshPayload.getBytes(StandardCharsets.UTF_8))
+
+                    // Create signatures
+                    def mac = Mac.getInstance("HmacSHA256")
+                    def secretKey = new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
+                    mac.init(secretKey)
+
+                    def accessTokenData = encodedHeader + "." + encodedAccessPayload
+                    def accessSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(accessTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    mac.reset()
+                    mac.init(secretKey)
+                    def refreshTokenData = encodedHeader + "." + encodedRefreshPayload
+                    def refreshSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(refreshTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    accessToken = accessTokenData + "." + accessSignature
+                    refreshToken = refreshTokenData + "." + refreshSignature
+                    expiresIn = 3600L
+
+                    // Build user response object
+                    user = [
+                        userId: userRecord.userId,
+                        email: userRecord.email,
+                        username: userRecord.username,
+                        credits: userRecord.credits,
+                        avatarUrl: userRecord.avatarUrl,
+                        authProvider: userRecord.authProvider,
+                        createdDate: userRecord.createdDate?.toString(),
+                        lastLoginDate: userRecord.lastLoginDate?.toString()
+                    ]
+
+                    success = true
+                    message = isNewUser ? "Welcome to Novel Anime! Your account has been created with 500 credits." : "GitHub login successful."
+
+                } catch (Exception e) {
+                    ec.logger.error("GitHub user creation/linking failed", e)
+                    success = false
+                    message = "Failed to create or link GitHub account: " + e.message
+                    errorCode = "USER_CREATION_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- ==================== Google OAuth Services ==================== -->
+    
+    <!-- Get Google Authorization URL Service -->
+    <service verb="get" noun="GoogleAuthUrl" authenticate="false">
+        <description>Generate Google OAuth authorization URL for initiating login flow.
+        Requirements: 2.2.1</description>
+        <in-parameters>
+            <parameter name="redirectUri">
+                <description>Optional custom redirect URI after OAuth completion</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="authUrl"/>
+            <parameter name="state"/>
+            <parameter name="message"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.security.SecureRandom
+                import java.util.Base64
+                import java.net.URLEncoder
+                import java.nio.charset.StandardCharsets
+
+                try {
+                    // Get OAuth configuration from environment or defaults
+                    def clientId = System.getenv("GOOGLE_CLIENT_ID") ?: "your_google_client_id"
+                    def callbackUrl = redirectUri ?: System.getenv("GOOGLE_CALLBACK_URL") ?: "http://localhost:8080/rest/s1/novel-anime/auth/oauth/google/callback"
+                    def authorizeUrl = "https://accounts.google.com/o/oauth2/v2/auth"
+                    def scope = "openid email profile"
+
+                    // Generate state parameter for CSRF protection
+                    def random = new SecureRandom()
+                    def stateBytes = new byte[16]
+                    random.nextBytes(stateBytes)
+                    state = Base64.urlEncoder.withoutPadding().encodeToString(stateBytes)
+
+                    // Build authorization URL
+                    def params = [
+                        "client_id=${URLEncoder.encode(clientId, StandardCharsets.UTF_8)}",
+                        "redirect_uri=${URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8)}",
+                        "scope=${URLEncoder.encode(scope, StandardCharsets.UTF_8)}",
+                        "response_type=code",
+                        "state=${URLEncoder.encode(state, StandardCharsets.UTF_8)}",
+                        "access_type=offline",
+                        "prompt=consent"
+                    ].join("&amp;")
+
+                    authUrl = "${authorizeUrl}?${params}"
+                    success = true
+                    message = "Google authorization URL generated successfully."
+
+                    ec.logger.info("Generated Google OAuth URL with state: ${state}")
+
+                } catch (Exception e) {
+                    ec.logger.error("Failed to generate Google auth URL", e)
+                    success = false
+                    message = "Failed to generate authorization URL: " + e.message
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Google OAuth Login Service (Exchange code for token and authenticate) -->
+    <service verb="login" noun="WithGoogle" authenticate="false">
+        <description>Exchange Google authorization code for access token and authenticate user.
+        Creates new user with 500 credits if first login, or links to existing account.
+        Requirements: 2.2.1, 2.2.2</description>
+        <in-parameters>
+            <parameter name="code" required="true">
+                <description>Authorization code from Google OAuth callback</description>
+            </parameter>
+            <parameter name="state">
+                <description>State parameter for CSRF verification</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="isNewUser" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.net.http.HttpClient
+                import java.net.http.HttpRequest
+                import java.net.http.HttpResponse
+                import java.net.URI
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+                import groovy.json.JsonBuilder
+
+                try {
+                    // Get OAuth configuration
+                    def clientId = System.getenv("GOOGLE_CLIENT_ID") ?: "your_google_client_id"
+                    def clientSecret = System.getenv("GOOGLE_CLIENT_SECRET") ?: "your_google_client_secret"
+                    def callbackUrl = System.getenv("GOOGLE_CALLBACK_URL") ?: "http://localhost:8080/rest/s1/novel-anime/auth/oauth/google/callback"
+                    def tokenUrl = "https://oauth2.googleapis.com/token"
+                    def apiUrl = "https://www.googleapis.com/oauth2/v2/userinfo"
+
+                    // Validate configuration
+                    if (clientId == "your_google_client_id" || clientSecret == "your_google_client_secret") {
+                        success = false
+                        message = "Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables."
+                        errorCode = "OAUTH_NOT_CONFIGURED"
+                        return
+                    }
+
+                    // Step 1: Exchange authorization code for access token
+                    def httpClient = HttpClient.newBuilder()
+                        .version(HttpClient.Version.HTTP_2)
+                        .build()
+
+                    def tokenRequestBody = [
+                        "client_id=${clientId}",
+                        "client_secret=${clientSecret}",
+                        "code=${code}",
+                        "grant_type=authorization_code",
+                        "redirect_uri=${callbackUrl}"
+                    ].join("&")
+
+                    def tokenRequest = HttpRequest.newBuilder()
+                        .uri(URI.create(tokenUrl))
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .header("Accept", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(tokenRequestBody))
+                        .build()
+
+                    def tokenResponse = httpClient.send(tokenRequest, HttpResponse.BodyHandlers.ofString())
+                    
+                    if (tokenResponse.statusCode() != 200) {
+                        ec.logger.error("Google token exchange failed: ${tokenResponse.body()}")
+                        success = false
+                        message = "Failed to exchange authorization code. Please try again."
+                        errorCode = "TOKEN_EXCHANGE_FAILED"
+                        return
+                    }
+
+                    def tokenData = new JsonSlurper().parseText(tokenResponse.body())
+                    
+                    if (tokenData.error) {
+                        ec.logger.error("Google OAuth error: ${tokenData.error_description ?: tokenData.error}")
+                        success = false
+                        message = tokenData.error_description ?: "Google authorization failed."
+                        errorCode = "GOOGLE_AUTH_ERROR"
+                        return
+                    }
+
+                    def googleAccessToken = tokenData.access_token
+                    if (!googleAccessToken) {
+                        success = false
+                        message = "No access token received from Google."
+                        errorCode = "NO_ACCESS_TOKEN"
+                        return
+                    }
+
+                    // Step 2: Fetch user profile from Google API
+                    def userRequest = HttpRequest.newBuilder()
+                        .uri(URI.create(apiUrl))
+                        .header("Authorization", "Bearer ${googleAccessToken}")
+                        .header("Accept", "application/json")
+                        .GET()
+                        .build()
+
+                    def userResponse = httpClient.send(userRequest, HttpResponse.BodyHandlers.ofString())
+                    
+                    if (userResponse.statusCode() != 200) {
+                        ec.logger.error("Google user fetch failed: ${userResponse.body()}")
+                        success = false
+                        message = "Failed to fetch user profile from Google."
+                        errorCode = "USER_FETCH_FAILED"
+                        return
+                    }
+
+                    def googleUser = new JsonSlurper().parseText(userResponse.body())
+                    def googleUserId = googleUser.id?.toString()
+                    def googleEmail = googleUser.email
+                    def googleName = googleUser.name
+                    def googleAvatarUrl = googleUser.picture
+                    def googleGivenName = googleUser.given_name
+                    def googleFamilyName = googleUser.family_name
+
+                    if (!googleEmail) {
+                        success = false
+                        message = "Could not retrieve email from Google. Please ensure your email is verified on Google."
+                        errorCode = "NO_EMAIL"
+                        return
+                    }
+
+                    if (!googleUser.verified_email) {
+                        success = false
+                        message = "Your Google email is not verified. Please verify your email on Google and try again."
+                        errorCode = "EMAIL_NOT_VERIFIED"
+                        return
+                    }
+
+                    ec.logger.info("Google user fetched: ${googleName} (${googleEmail})")
+
+                    // Step 3: Call the user creation/linking service
+                    def createResult = ec.service.sync().name("novel.anime.NovelAnimeAuthServices.createOrLink#GoogleUser")
+                        .parameters([
+                            googleUserId: googleUserId,
+                            email: googleEmail,
+                            username: googleName,
+                            givenName: googleGivenName,
+                            familyName: googleFamilyName,
+                            avatarUrl: googleAvatarUrl,
+                            googleAccessToken: googleAccessToken,
+                            profileData: userResponse.body()
+                        ])
+                        .disableAuthz()
+                        .call()
+
+                    if (!createResult.success) {
+                        success = false
+                        message = createResult.message
+                        errorCode = createResult.errorCode
+                        return
+                    }
+
+                    // Return the results
+                    success = true
+                    accessToken = createResult.accessToken
+                    refreshToken = createResult.refreshToken
+                    expiresIn = createResult.expiresIn
+                    user = createResult.user
+                    isNewUser = createResult.isNewUser
+                    message = createResult.message
+
+                } catch (Exception e) {
+                    ec.logger.error("Google OAuth login failed", e)
+                    success = false
+                    message = "Google login failed: " + e.message
+                    errorCode = "GOOGLE_LOGIN_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Handle Google OAuth Callback (for redirect-based flow) -->
+    <service verb="handle" noun="GoogleCallback" authenticate="false">
+        <description>Handle Google OAuth callback redirect. Exchanges code for token and returns user data.
+        Requirements: 2.2.1, 2.2.2</description>
+        <in-parameters>
+            <parameter name="code">
+                <description>Authorization code from Google</description>
+            </parameter>
+            <parameter name="state">
+                <description>State parameter for CSRF verification</description>
+            </parameter>
+            <parameter name="error">
+                <description>Error code if authorization failed</description>
+            </parameter>
+            <parameter name="error_description">
+                <description>Error description if authorization failed</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="isNewUser" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+            <parameter name="redirectUrl"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.net.URLEncoder
+
+                // Handle error from Google (Requirement 2.2.3)
+                if (error) {
+                    success = false
+                    message = error_description ?: "Google authorization was denied or failed."
+                    errorCode = "GOOGLE_AUTH_DENIED"
+                    redirectUrl = "novelanime://auth/error?message=${URLEncoder.encode(message, 'UTF-8')}"
+                    return
+                }
+
+                if (!code) {
+                    success = false
+                    message = "No authorization code received from Google."
+                    errorCode = "NO_AUTH_CODE"
+                    redirectUrl = "novelanime://auth/error?message=${URLEncoder.encode(message, 'UTF-8')}"
+                    return
+                }
+
+                // Call the main login service
+                def loginResult = ec.service.sync().name("novel.anime.NovelAnimeAuthServices.login#WithGoogle")
+                    .parameters([code: code, state: state])
+                    .disableAuthz()
+                    .call()
+
+                success = loginResult.success
+                accessToken = loginResult.accessToken
+                refreshToken = loginResult.refreshToken
+                expiresIn = loginResult.expiresIn
+                user = loginResult.user
+                isNewUser = loginResult.isNewUser
+                message = loginResult.message
+                errorCode = loginResult.errorCode
+
+                // Generate redirect URL for desktop app
+                if (success) {
+                    redirectUrl = "novelanime://auth/success?token=${accessToken}&amp;refresh=${refreshToken}"
+                } else {
+                    redirectUrl = "novelanime://auth/error?message=${URLEncoder.encode(message ?: 'Login failed', 'UTF-8')}"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Create or Link Google User Service -->
+    <service verb="createOrLink" noun="GoogleUser" authenticate="false">
+        <description>Check if Google user already exists, create new user with 500 credits if first login,
+        or link OAuth account to existing user if email matches.
+        Requirements: 2.2.2, 2.2.4</description>
+        <in-parameters>
+            <parameter name="googleUserId" required="true">
+                <description>Google user ID</description>
+            </parameter>
+            <parameter name="email" required="true">
+                <description>User email from Google</description>
+            </parameter>
+            <parameter name="username">
+                <description>Display name from Google</description>
+            </parameter>
+            <parameter name="givenName">
+                <description>Given name from Google</description>
+            </parameter>
+            <parameter name="familyName">
+                <description>Family name from Google</description>
+            </parameter>
+            <parameter name="avatarUrl">
+                <description>Avatar URL from Google</description>
+            </parameter>
+            <parameter name="googleAccessToken">
+                <description>Google access token for API calls</description>
+            </parameter>
+            <parameter name="profileData">
+                <description>Full Google profile JSON data</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="userId"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="isNewUser" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import javax.crypto.Mac
+                import javax.crypto.spec.SecretKeySpec
+                import java.util.Base64
+                import java.time.Instant
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonBuilder
+
+                try {
+                    def now = ec.user.nowTimestamp
+                    isNewUser = false
+
+                    // Step 1: Check if OAuth account already exists (Requirement 2.2.2 - existing user)
+                    def existingOAuth = ec.entity.find("novel.anime.user.UserOAuthAccount")
+                        .condition("provider", "google")
+                        .condition("providerUserId", googleUserId)
+                        .disableAuthz()
+                        .one()
+
+                    def userRecord = null
+
+                    if (existingOAuth) {
+                        // User has logged in with Google before - get existing user
+                        userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                            .condition("userId", existingOAuth.userId)
+                            .disableAuthz()
+                            .one()
+
+                        if (!userRecord) {
+                            // Orphaned OAuth account - clean up and create new user
+                            existingOAuth.delete()
+                            existingOAuth = null
+                        } else {
+                            // Update OAuth account with latest token
+                            existingOAuth.accessToken = googleAccessToken
+                            existingOAuth.profileData = profileData
+                            existingOAuth.lastUsedDate = now
+                            existingOAuth.update()
+
+                            // Update user's last login and avatar
+                            userRecord.lastLoginDate = now
+                            if (avatarUrl && !userRecord.avatarUrl) {
+                                userRecord.avatarUrl = avatarUrl
+                            }
+                            userRecord.update()
+
+                            userId = userRecord.userId
+                            ec.logger.info("Existing Google user logged in: ${email}")
+                        }
+                    }
+
+                    if (!userRecord) {
+                        // Step 2: Check if user exists with same email (for account linking)
+                        def existingUserByEmail = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                            .condition("email", email.toLowerCase().trim())
+                            .disableAuthz()
+                            .one()
+
+                        if (existingUserByEmail) {
+                            // Link Google account to existing user
+                            userRecord = existingUserByEmail
+                            userId = userRecord.userId
+
+                            // Create OAuth account link
+                            ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
+                                oauthAccountId: ec.entity.sequencedIdPrimary,
+                                userId: userId,
+                                provider: "google",
+                                providerUserId: googleUserId,
+                                accessToken: googleAccessToken,
+                                profileData: profileData,
+                                createdDate: now,
+                                lastUsedDate: now
+                            ]).create()
+
+                            // Update user's last login and avatar if not set
+                            userRecord.lastLoginDate = now
+                            if (avatarUrl && !userRecord.avatarUrl) {
+                                userRecord.avatarUrl = avatarUrl
+                            }
+                            // Update authProvider if it was 'local'
+                            if (userRecord.authProvider == 'local') {
+                                userRecord.authProvider = 'google'
+                            }
+                            userRecord.update()
+
+                            ec.logger.info("Google account linked to existing user: ${email}")
+
+                        } else {
+                            // Step 3: Create new user with 500 initial credits (Requirement 2.2.4)
+                            isNewUser = true
+                            userId = ec.entity.sequencedIdPrimary
+                            def displayName = username ?: (givenName && familyName ? "${givenName} ${familyName}" : givenName ?: email.split('@')[0])
+
+                            // Create new user
+                            ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                                userId: userId,
+                                email: email.toLowerCase().trim(),
+                                username: displayName,
+                                passwordHash: null, // No password for OAuth users
+                                avatarUrl: avatarUrl,
+                                credits: 500,
+                                status: 'active',
+                                authProvider: 'google',
+                                createdDate: now,
+                                lastLoginDate: now
+                            ]).create()
+
+                            // Record initial credits transaction
+                            ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
+                                transactionId: ec.entity.sequencedIdPrimary,
+                                userId: userId,
+                                amount: 500,
+                                type: 'initial',
+                                operationType: 'google_registration',
+                                description: 'Initial credits on Google registration',
+                                balanceAfter: 500,
+                                timestamp: now
+                            ]).create()
+
+                            // Create OAuth account link
+                            ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
+                                oauthAccountId: ec.entity.sequencedIdPrimary,
+                                userId: userId,
+                                provider: "google",
+                                providerUserId: googleUserId,
+                                accessToken: googleAccessToken,
+                                profileData: profileData,
+                                createdDate: now,
+                                lastUsedDate: now
+                            ]).create()
+
+                            // Fetch the created user
+                            userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                                .condition("userId", userId)
+                                .disableAuthz()
+                                .one()
+
+                            ec.logger.info("New Google user created: ${email} with 500 initial credits")
+                        }
+                    }
+
+                    // Step 4: Generate JWT tokens
+                    def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
+                    def accessExpiryTime = Instant.now().plusSeconds(3600) // 1 hour
+                    def refreshExpiryTime = Instant.now().plusSeconds(604800) // 7 days
+
+                    // Create JWT Header
+                    def header = new JsonBuilder([
+                        alg: "HS256",
+                        typ: "JWT"
+                    ]).toString()
+
+                    // Create Access Token payload
+                    def accessPayload = new JsonBuilder([
+                        sub: userId,
+                        email: userRecord.email,
+                        provider: "google",
+                        iat: Instant.now().epochSecond,
+                        exp: accessExpiryTime.epochSecond,
+                        type: "access"
+                    ]).toString()
+
+                    // Create Refresh Token payload
+                    def refreshPayload = new JsonBuilder([
+                        sub: userId,
+                        iat: Instant.now().epochSecond,
+                        exp: refreshExpiryTime.epochSecond,
+                        type: "refresh"
+                    ]).toString()
+
+                    // Base64 encode
+                    def encodedHeader = Base64.urlEncoder.withoutPadding().encodeToString(header.getBytes(StandardCharsets.UTF_8))
+                    def encodedAccessPayload = Base64.urlEncoder.withoutPadding().encodeToString(accessPayload.getBytes(StandardCharsets.UTF_8))
+                    def encodedRefreshPayload = Base64.urlEncoder.withoutPadding().encodeToString(refreshPayload.getBytes(StandardCharsets.UTF_8))
+
+                    // Create signatures
+                    def mac = Mac.getInstance("HmacSHA256")
+                    def secretKey = new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
+                    mac.init(secretKey)
+
+                    def accessTokenData = encodedHeader + "." + encodedAccessPayload
+                    def accessSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(accessTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    mac.reset()
+                    mac.init(secretKey)
+                    def refreshTokenData = encodedHeader + "." + encodedRefreshPayload
+                    def refreshSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(refreshTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    accessToken = accessTokenData + "." + accessSignature
+                    refreshToken = refreshTokenData + "." + refreshSignature
+                    expiresIn = 3600L
+
+                    // Build user response object
+                    user = [
+                        userId: userRecord.userId,
+                        email: userRecord.email,
+                        username: userRecord.username,
+                        credits: userRecord.credits,
+                        avatarUrl: userRecord.avatarUrl,
+                        authProvider: userRecord.authProvider,
+                        createdDate: userRecord.createdDate?.toString(),
+                        lastLoginDate: userRecord.lastLoginDate?.toString()
+                    ]
+
+                    success = true
+                    message = isNewUser ? "Welcome to Novel Anime! Your account has been created with 500 credits." : "Google login successful."
+
+                } catch (Exception e) {
+                    ec.logger.error("Google user creation/linking failed", e)
+                    success = false
+                    message = "Failed to create or link Google account: " + e.message
+                    errorCode = "USER_CREATION_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- ==================== WeChat OAuth Services ==================== -->
+    
+    <!-- Get WeChat QR Code Service -->
+    <service verb="get" noun="WeChatQRCode" authenticate="false">
+        <description>Generate WeChat login QR code URL and return ticket for status polling.
+        Requirements: 2.3.1</description>
+        <in-parameters>
+            <parameter name="redirectUri">
+                <description>Optional custom redirect URI after OAuth completion</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="qrcodeUrl"/>
+            <parameter name="ticket"/>
+            <parameter name="expireSeconds" type="Integer"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.security.SecureRandom
+                import java.util.Base64
+                import java.net.URLEncoder
+                import java.nio.charset.StandardCharsets
+
+                try {
+                    // Get WeChat OAuth configuration from environment or defaults
+                    def appId = System.getenv("WECHAT_APP_ID") ?: "your_wechat_app_id"
+                    def callbackUrl = redirectUri ?: System.getenv("WECHAT_CALLBACK_URL") ?: "http://localhost:8080/rest/s1/novel-anime/auth/oauth/wechat/callback"
+                    def qrcodeBaseUrl = "https://open.weixin.qq.com/connect/qrconnect"
+                    def scope = "snsapi_login"
+                    def expireSecondsConfig = System.getenv("WECHAT_QR_EXPIRE_SECONDS") ?: "600"
+
+                    // Validate configuration
+                    if (appId == "your_wechat_app_id") {
+                        success = false
+                        message = "WeChat OAuth is not configured. Please set WECHAT_APP_ID environment variable."
+                        errorCode = "OAUTH_NOT_CONFIGURED"
+                        return
+                    }
+
+                    // Generate unique ticket for this QR code session
+                    def random = new SecureRandom()
+                    def ticketBytes = new byte[16]
+                    random.nextBytes(ticketBytes)
+                    ticket = Base64.urlEncoder.withoutPadding().encodeToString(ticketBytes)
+
+                    // Store QR code session in memory (in production, use Redis or database)
+                    def qrSession = [
+                        ticket: ticket,
+                        status: 'waiting',
+                        createdTime: System.currentTimeMillis(),
+                        expireTime: System.currentTimeMillis() + (Integer.parseInt(expireSecondsConfig) * 1000),
+                        redirectUri: callbackUrl
+                    ]
+
+                    // Store in application context (temporary storage)
+                    if (!ec.web.applicationAttributes.wechatQRSessions) {
+                        ec.web.applicationAttributes.wechatQRSessions = [:]
+                    }
+                    ec.web.applicationAttributes.wechatQRSessions[ticket] = qrSession
+
+                    // Build WeChat QR code URL
+                    def params = [
+                        "appid=${URLEncoder.encode(appId, StandardCharsets.UTF_8)}",
+                        "redirect_uri=${URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8)}",
+                        "response_type=code",
+                        "scope=${URLEncoder.encode(scope, StandardCharsets.UTF_8)}",
+                        "state=${URLEncoder.encode(ticket, StandardCharsets.UTF_8)}"
+                    ].join("&")
+
+                    qrcodeUrl = "${qrcodeBaseUrl}?${params}#wechat_redirect"
+                    expireSeconds = Integer.parseInt(expireSecondsConfig)
+                    success = true
+                    message = "WeChat QR code generated successfully."
+
+                    ec.logger.info("Generated WeChat QR code with ticket: ${ticket}")
+
+                } catch (Exception e) {
+                    ec.logger.error("Failed to generate WeChat QR code", e)
+                    success = false
+                    message = "Failed to generate WeChat QR code: " + e.message
+                    errorCode = "QR_GENERATION_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Check WeChat Login Status Service -->
+    <service verb="check" noun="WeChatLoginStatus" authenticate="false">
+        <description>Check scan status by ticket. Returns status: waiting/scanned/confirmed/expired.
+        Requirements: 2.3.1, 2.3.3</description>
+        <in-parameters>
+            <parameter name="ticket" required="true">
+                <description>QR code ticket for status checking</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="status"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="isNewUser" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                try {
+                    // Get QR session from memory storage
+                    def qrSessions = ec.web.applicationAttributes.wechatQRSessions
+                    if (!qrSessions) {
+                        success = false
+                        status = 'expired'
+                        message = "QR code session not found."
+                        errorCode = "SESSION_NOT_FOUND"
+                        return
+                    }
+
+                    def qrSession = qrSessions[ticket]
+                    if (!qrSession) {
+                        success = false
+                        status = 'expired'
+                        message = "QR code ticket not found or expired."
+                        errorCode = "TICKET_NOT_FOUND"
+                        return
+                    }
+
+                    // Check if session has expired
+                    def currentTime = System.currentTimeMillis()
+                    if (currentTime > qrSession.expireTime) {
+                        // Clean up expired session
+                        qrSessions.remove(ticket)
+                        success = false
+                        status = 'expired'
+                        message = "QR code has expired. Please generate a new one."
+                        errorCode = "QR_EXPIRED"
+                        return
+                    }
+
+                    // Return current status
+                    status = qrSession.status
+                    success = true
+
+                    switch (status) {
+                        case 'waiting':
+                            message = "Waiting for WeChat scan..."
+                            break
+                        case 'scanned':
+                            message = "QR code scanned. Please confirm on your WeChat app."
+                            break
+                        case 'confirmed':
+                            // If confirmed, return the stored auth data
+                            if (qrSession.authData) {
+                                accessToken = qrSession.authData.accessToken
+                                refreshToken = qrSession.authData.refreshToken
+                                expiresIn = qrSession.authData.expiresIn
+                                user = qrSession.authData.user
+                                isNewUser = qrSession.authData.isNewUser
+                                message = qrSession.authData.message
+                                
+                                // Clean up session after successful retrieval
+                                qrSessions.remove(ticket)
+                            } else {
+                                message = "Login confirmed but auth data not available."
+                            }
+                            break
+                        case 'error':
+                            message = qrSession.errorMessage ?: "WeChat login failed."
+                            errorCode = qrSession.errorCode ?: "WECHAT_LOGIN_ERROR"
+                            // Clean up error session
+                            qrSessions.remove(ticket)
+                            break
+                        default:
+                            message = "Unknown status: ${status}"
+                            break
+                    }
+
+                    ec.logger.debug("WeChat login status check - Ticket: ${ticket}, Status: ${status}")
+
+                } catch (Exception e) {
+                    ec.logger.error("WeChat login status check failed", e)
+                    success = false
+                    status = 'error'
+                    message = "Status check failed: " + e.message
+                    errorCode = "STATUS_CHECK_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- WeChat OAuth Login Service (Exchange code for token and authenticate) -->
+    <service verb="login" noun="WithWeChat" authenticate="false">
+        <description>Exchange WeChat authorization code for access token and authenticate user.
+        Creates new user with 500 credits if first login, or links to existing account.
+        Requirements: 2.3.2, 2.3.4</description>
+        <in-parameters>
+            <parameter name="code" required="true">
+                <description>Authorization code from WeChat OAuth callback</description>
+            </parameter>
+            <parameter name="state">
+                <description>State parameter (ticket) for session verification</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="isNewUser" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.net.http.HttpClient
+                import java.net.http.HttpRequest
+                import java.net.http.HttpResponse
+                import java.net.URI
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+                import groovy.json.JsonBuilder
+
+                try {
+                    // Get WeChat OAuth configuration
+                    def appId = System.getenv("WECHAT_APP_ID") ?: "your_wechat_app_id"
+                    def appSecret = System.getenv("WECHAT_APP_SECRET") ?: "your_wechat_app_secret"
+                    def tokenUrl = "https://api.weixin.qq.com/sns/oauth2/access_token"
+                    def userinfoUrl = "https://api.weixin.qq.com/sns/userinfo"
+
+                    // Validate configuration
+                    if (appId == "your_wechat_app_id" || appSecret == "your_wechat_app_secret") {
+                        success = false
+                        message = "WeChat OAuth is not configured. Please set WECHAT_APP_ID and WECHAT_APP_SECRET environment variables."
+                        errorCode = "OAUTH_NOT_CONFIGURED"
+                        return
+                    }
+
+                    // Step 1: Exchange authorization code for access token
+                    def httpClient = HttpClient.newBuilder()
+                        .version(HttpClient.Version.HTTP_2)
+                        .build()
+
+                    def tokenRequestUrl = "${tokenUrl}?appid=${appId}&secret=${appSecret}&code=${code}&grant_type=authorization_code"
+
+                    def tokenRequest = HttpRequest.newBuilder()
+                        .uri(URI.create(tokenRequestUrl))
+                        .header("Accept", "application/json")
+                        .GET()
+                        .build()
+
+                    def tokenResponse = httpClient.send(tokenRequest, HttpResponse.BodyHandlers.ofString())
+                    
+                    if (tokenResponse.statusCode() != 200) {
+                        ec.logger.error("WeChat token exchange failed: ${tokenResponse.body()}")
+                        success = false
+                        message = "Failed to exchange authorization code. Please try again."
+                        errorCode = "TOKEN_EXCHANGE_FAILED"
+                        return
+                    }
+
+                    def tokenData = new JsonSlurper().parseText(tokenResponse.body())
+                    
+                    if (tokenData.errcode) {
+                        ec.logger.error("WeChat OAuth error: ${tokenData.errmsg ?: tokenData.errcode}")
+                        success = false
+                        message = tokenData.errmsg ?: "WeChat authorization failed."
+                        errorCode = "WECHAT_AUTH_ERROR"
+                        return
+                    }
+
+                    def wechatAccessToken = tokenData.access_token
+                    def openid = tokenData.openid
+                    def unionid = tokenData.unionid // May be null for some apps
+                    
+                    if (!wechatAccessToken || !openid) {
+                        success = false
+                        message = "No access token or openid received from WeChat."
+                        errorCode = "NO_ACCESS_TOKEN"
+                        return
+                    }
+
+                    // Step 2: Fetch user profile from WeChat API
+                    def userinfoRequestUrl = "${userinfoUrl}?access_token=${wechatAccessToken}&openid=${openid}&lang=zh_CN"
+
+                    def userRequest = HttpRequest.newBuilder()
+                        .uri(URI.create(userinfoRequestUrl))
+                        .header("Accept", "application/json")
+                        .GET()
+                        .build()
+
+                    def userResponse = httpClient.send(userRequest, HttpResponse.BodyHandlers.ofString())
+                    
+                    if (userResponse.statusCode() != 200) {
+                        ec.logger.error("WeChat user fetch failed: ${userResponse.body()}")
+                        success = false
+                        message = "Failed to fetch user profile from WeChat."
+                        errorCode = "USER_FETCH_FAILED"
+                        return
+                    }
+
+                    def wechatUser = new JsonSlurper().parseText(userResponse.body())
+                    
+                    if (wechatUser.errcode) {
+                        ec.logger.error("WeChat userinfo error: ${wechatUser.errmsg ?: wechatUser.errcode}")
+                        success = false
+                        message = wechatUser.errmsg ?: "Failed to get WeChat user info."
+                        errorCode = "USERINFO_ERROR"
+                        return
+                    }
+
+                    def wechatUserId = unionid ?: openid // Prefer unionid if available
+                    def wechatNickname = wechatUser.nickname
+                    def wechatAvatarUrl = wechatUser.headimgurl
+                    def wechatCountry = wechatUser.country
+                    def wechatProvince = wechatUser.province
+                    def wechatCity = wechatUser.city
+                    def wechatSex = wechatUser.sex // 1=male, 2=female, 0=unknown
+
+                    ec.logger.info("WeChat user fetched: ${wechatNickname} (${openid})")
+
+                    // Step 3: Call the user creation/linking service
+                    def createResult = ec.service.sync().name("novel.anime.NovelAnimeAuthServices.createOrLink#WeChatUser")
+                        .parameters([
+                            wechatUserId: wechatUserId,
+                            openid: openid,
+                            unionid: unionid,
+                            nickname: wechatNickname,
+                            avatarUrl: wechatAvatarUrl,
+                            country: wechatCountry,
+                            province: wechatProvince,
+                            city: wechatCity,
+                            sex: wechatSex,
+                            wechatAccessToken: wechatAccessToken,
+                            profileData: userResponse.body()
+                        ])
+                        .disableAuthz()
+                        .call()
+
+                    if (!createResult.success) {
+                        success = false
+                        message = createResult.message
+                        errorCode = createResult.errorCode
+                        return
+                    }
+
+                    // Return the results
+                    success = true
+                    accessToken = createResult.accessToken
+                    refreshToken = createResult.refreshToken
+                    expiresIn = createResult.expiresIn
+                    user = createResult.user
+                    isNewUser = createResult.isNewUser
+                    message = createResult.message
+
+                    // Update QR session status if state (ticket) is provided
+                    if (state) {
+                        def qrSessions = ec.web.applicationAttributes.wechatQRSessions
+                        if (qrSessions && qrSessions[state]) {
+                            qrSessions[state].status = 'confirmed'
+                            qrSessions[state].authData = [
+                                accessToken: accessToken,
+                                refreshToken: refreshToken,
+                                expiresIn: expiresIn,
+                                user: user,
+                                isNewUser: isNewUser,
+                                message: message
+                            ]
+                        }
+                    }
+
+                } catch (Exception e) {
+                    ec.logger.error("WeChat OAuth login failed", e)
+                    success = false
+                    message = "WeChat login failed: " + e.message
+                    errorCode = "WECHAT_LOGIN_ERROR"
+                    
+                    // Update QR session status on error
+                    if (state) {
+                        def qrSessions = ec.web.applicationAttributes.wechatQRSessions
+                        if (qrSessions && qrSessions[state]) {
+                            qrSessions[state].status = 'error'
+                            qrSessions[state].errorMessage = message
+                            qrSessions[state].errorCode = errorCode
+                        }
+                    }
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Handle WeChat OAuth Callback (for redirect-based flow) -->
+    <service verb="handle" noun="WeChatCallback" authenticate="false">
+        <description>Handle WeChat OAuth callback redirect. Exchanges code for token and returns user data.
+        Requirements: 2.3.1, 2.3.2</description>
+        <in-parameters>
+            <parameter name="code">
+                <description>Authorization code from WeChat</description>
+            </parameter>
+            <parameter name="state">
+                <description>State parameter (ticket) for session verification</description>
+            </parameter>
+            <parameter name="error">
+                <description>Error code if authorization failed</description>
+            </parameter>
+            <parameter name="error_description">
+                <description>Error description if authorization failed</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="isNewUser" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+            <parameter name="redirectUrl"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.net.URLEncoder
+
+                // Handle error from WeChat (Requirement 2.3.3)
+                if (error) {
+                    success = false
+                    message = error_description ?: "WeChat authorization was denied or failed."
+                    errorCode = "WECHAT_AUTH_DENIED"
+                    redirectUrl = "novelanime://auth/error?message=${URLEncoder.encode(message, 'UTF-8')}"
+                    
+                    // Update QR session status on error
+                    if (state) {
+                        def qrSessions = ec.web.applicationAttributes.wechatQRSessions
+                        if (qrSessions && qrSessions[state]) {
+                            qrSessions[state].status = 'error'
+                            qrSessions[state].errorMessage = message
+                            qrSessions[state].errorCode = errorCode
+                        }
+                    }
+                    return
+                }
+
+                if (!code) {
+                    success = false
+                    message = "No authorization code received from WeChat."
+                    errorCode = "NO_AUTH_CODE"
+                    redirectUrl = "novelanime://auth/error?message=${URLEncoder.encode(message, 'UTF-8')}"
+                    
+                    // Update QR session status on error
+                    if (state) {
+                        def qrSessions = ec.web.applicationAttributes.wechatQRSessions
+                        if (qrSessions && qrSessions[state]) {
+                            qrSessions[state].status = 'error'
+                            qrSessions[state].errorMessage = message
+                            qrSessions[state].errorCode = errorCode
+                        }
+                    }
+                    return
+                }
+
+                // Call the main login service
+                def loginResult = ec.service.sync().name("novel.anime.NovelAnimeAuthServices.login#WithWeChat")
+                    .parameters([code: code, state: state])
+                    .disableAuthz()
+                    .call()
+
+                success = loginResult.success
+                accessToken = loginResult.accessToken
+                refreshToken = loginResult.refreshToken
+                expiresIn = loginResult.expiresIn
+                user = loginResult.user
+                isNewUser = loginResult.isNewUser
+                message = loginResult.message
+                errorCode = loginResult.errorCode
+
+                // Generate redirect URL for desktop app
+                if (success) {
+                    redirectUrl = "novelanime://auth/success?token=${accessToken}&refresh=${refreshToken}"
+                } else {
+                    redirectUrl = "novelanime://auth/error?message=${URLEncoder.encode(message ?: 'Login failed', 'UTF-8')}"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Create or Link WeChat User Service -->
+    <service verb="createOrLink" noun="WeChatUser" authenticate="false">
+        <description>Check if WeChat user already exists, create new user with 500 credits if first login,
+        or link OAuth account to existing user if email matches.
+        Requirements: 2.3.2, 2.3.4</description>
+        <in-parameters>
+            <parameter name="wechatUserId" required="true">
+                <description>WeChat user ID (unionid or openid)</description>
+            </parameter>
+            <parameter name="openid" required="true">
+                <description>WeChat openid</description>
+            </parameter>
+            <parameter name="unionid">
+                <description>WeChat unionid (if available)</description>
+            </parameter>
+            <parameter name="nickname">
+                <description>WeChat nickname</description>
+            </parameter>
+            <parameter name="avatarUrl">
+                <description>Avatar URL from WeChat</description>
+            </parameter>
+            <parameter name="country">
+                <description>Country from WeChat profile</description>
+            </parameter>
+            <parameter name="province">
+                <description>Province from WeChat profile</description>
+            </parameter>
+            <parameter name="city">
+                <description>City from WeChat profile</description>
+            </parameter>
+            <parameter name="sex">
+                <description>Sex from WeChat profile (1=male, 2=female, 0=unknown)</description>
+            </parameter>
+            <parameter name="wechatAccessToken">
+                <description>WeChat access token for API calls</description>
+            </parameter>
+            <parameter name="profileData">
+                <description>Full WeChat profile JSON data</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="userId"/>
+            <parameter name="accessToken"/>
+            <parameter name="refreshToken"/>
+            <parameter name="expiresIn" type="Long"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="isNewUser" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import javax.crypto.Mac
+                import javax.crypto.spec.SecretKeySpec
+                import java.util.Base64
+                import java.time.Instant
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonBuilder
+
+                try {
+                    def now = ec.user.nowTimestamp
+                    isNewUser = false
+
+                    // Step 1: Check if OAuth account already exists (Requirement 2.3.2 - existing user)
+                    def existingOAuth = ec.entity.find("novel.anime.user.UserOAuthAccount")
+                        .condition("provider", "wechat")
+                        .condition("providerUserId", wechatUserId)
+                        .disableAuthz()
+                        .one()
+
+                    def userRecord = null
+
+                    if (existingOAuth) {
+                        // User has logged in with WeChat before - get existing user
+                        userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                            .condition("userId", existingOAuth.userId)
+                            .disableAuthz()
+                            .one()
+
+                        if (!userRecord) {
+                            // Orphaned OAuth account - clean up and create new user
+                            existingOAuth.delete()
+                            existingOAuth = null
+                        } else {
+                            // Update OAuth account with latest token
+                            existingOAuth.accessToken = wechatAccessToken
+                            existingOAuth.profileData = profileData
+                            existingOAuth.lastUsedDate = now
+                            existingOAuth.update()
+
+                            // Update user's last login and avatar
+                            userRecord.lastLoginDate = now
+                            if (avatarUrl && !userRecord.avatarUrl) {
+                                userRecord.avatarUrl = avatarUrl
+                            }
+                            userRecord.update()
+
+                            userId = userRecord.userId
+                            ec.logger.info("Existing WeChat user logged in: ${nickname} (${openid})")
+                        }
+                    }
+
+                    if (!userRecord) {
+                        // Step 2: WeChat doesn't provide email, so we create a new user directly
+                        // (No email linking possible with WeChat)
+                        
+                        // Step 3: Create new user with 500 initial credits (Requirement 2.3.4)
+                        isNewUser = true
+                        userId = ec.entity.sequencedIdPrimary
+                        def displayName = nickname ?: "WeChat User"
+                        
+                        // Generate a placeholder email using openid
+                        def placeholderEmail = "wechat_${openid}@novelanime.local"
+
+                        // Create new user
+                        ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                            userId: userId,
+                            email: placeholderEmail,
+                            username: displayName,
+                            passwordHash: null, // No password for OAuth users
+                            avatarUrl: avatarUrl,
+                            credits: 500,
+                            status: 'active',
+                            authProvider: 'wechat',
+                            createdDate: now,
+                            lastLoginDate: now
+                        ]).create()
+
+                        // Record initial credits transaction
+                        ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
+                            transactionId: ec.entity.sequencedIdPrimary,
+                            userId: userId,
+                            amount: 500,
+                            type: 'initial',
+                            operationType: 'wechat_registration',
+                            description: 'Initial credits on WeChat registration',
+                            balanceAfter: 500,
+                            timestamp: now
+                        ]).create()
+
+                        // Create OAuth account link
+                        ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
+                            oauthAccountId: ec.entity.sequencedIdPrimary,
+                            userId: userId,
+                            provider: "wechat",
+                            providerUserId: wechatUserId,
+                            accessToken: wechatAccessToken,
+                            profileData: profileData,
+                            createdDate: now,
+                            lastUsedDate: now
+                        ]).create()
+
+                        // Fetch the created user
+                        userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                            .condition("userId", userId)
+                            .disableAuthz()
+                            .one()
+
+                        ec.logger.info("New WeChat user created: ${nickname} (${openid}) with 500 initial credits")
+                    }
+
+                    // Step 4: Generate JWT tokens
+                    def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
+                    def accessExpiryTime = Instant.now().plusSeconds(3600) // 1 hour
+                    def refreshExpiryTime = Instant.now().plusSeconds(604800) // 7 days
+
+                    // Create JWT Header
+                    def header = new JsonBuilder([
+                        alg: "HS256",
+                        typ: "JWT"
+                    ]).toString()
+
+                    // Create Access Token payload
+                    def accessPayload = new JsonBuilder([
+                        sub: userId,
+                        email: userRecord.email,
+                        provider: "wechat",
+                        iat: Instant.now().epochSecond,
+                        exp: accessExpiryTime.epochSecond,
+                        type: "access"
+                    ]).toString()
+
+                    // Create Refresh Token payload
+                    def refreshPayload = new JsonBuilder([
+                        sub: userId,
+                        iat: Instant.now().epochSecond,
+                        exp: refreshExpiryTime.epochSecond,
+                        type: "refresh"
+                    ]).toString()
+
+                    // Base64 encode
+                    def encodedHeader = Base64.urlEncoder.withoutPadding().encodeToString(header.getBytes(StandardCharsets.UTF_8))
+                    def encodedAccessPayload = Base64.urlEncoder.withoutPadding().encodeToString(accessPayload.getBytes(StandardCharsets.UTF_8))
+                    def encodedRefreshPayload = Base64.urlEncoder.withoutPadding().encodeToString(refreshPayload.getBytes(StandardCharsets.UTF_8))
+
+                    // Create signatures
+                    def mac = Mac.getInstance("HmacSHA256")
+                    def secretKey = new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
+                    mac.init(secretKey)
+
+                    def accessTokenData = encodedHeader + "." + encodedAccessPayload
+                    def accessSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(accessTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    mac.reset()
+                    mac.init(secretKey)
+                    def refreshTokenData = encodedHeader + "." + encodedRefreshPayload
+                    def refreshSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(refreshTokenData.getBytes(StandardCharsets.UTF_8)))
+
+                    accessToken = accessTokenData + "." + accessSignature
+                    refreshToken = refreshTokenData + "." + refreshSignature
+                    expiresIn = 3600L
+
+                    // Build user response object
+                    user = [
+                        userId: userRecord.userId,
+                        email: userRecord.email,
+                        username: userRecord.username,
+                        credits: userRecord.credits,
+                        avatarUrl: userRecord.avatarUrl,
+                        authProvider: userRecord.authProvider,
+                        createdDate: userRecord.createdDate?.toString(),
+                        lastLoginDate: userRecord.lastLoginDate?.toString()
+                    ]
+
+                    success = true
+                    message = isNewUser ? "Welcome to Novel Anime! Your account has been created with 500 credits." : "WeChat login successful."
+
+                } catch (Exception e) {
+                    ec.logger.error("WeChat user creation/linking failed", e)
+                    success = false
+                    message = "Failed to create or link WeChat account: " + e.message
+                    errorCode = "USER_CREATION_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+</services>

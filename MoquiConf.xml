@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<moqui-conf xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/moqui-conf-3.xsd">
+    
+    <!-- Novel Anime Generator Component Configuration -->
+    
+    <!-- OAuth Configuration -->
+    <!-- GitHub OAuth Settings (Requirements: 2.1.1) -->
+    <!-- To configure: Set environment variables or replace these default values -->
+    <default-property name="github.oauth.client_id" value="your_github_client_id"/>
+    <default-property name="github.oauth.client_secret" value="your_github_client_secret"/>
+    <default-property name="github.oauth.callback_url" value="http://localhost:8080/rest/s1/novel-anime/auth/oauth/github/callback"/>
+    <default-property name="github.oauth.authorize_url" value="https://github.com/login/oauth/authorize"/>
+    <default-property name="github.oauth.token_url" value="https://github.com/login/oauth/access_token"/>
+    <default-property name="github.oauth.api_url" value="https://api.github.com/user"/>
+    <default-property name="github.oauth.scope" value="user:email read:user"/>
+    
+    <!-- Google OAuth Settings (Requirements: 2.2.1) -->
+    <!-- To configure: Set environment variables or replace these default values -->
+    <default-property name="google.oauth.client_id" value="your_google_client_id"/>
+    <default-property name="google.oauth.client_secret" value="your_google_client_secret"/>
+    <default-property name="google.oauth.callback_url" value="http://localhost:8080/rest/s1/novel-anime/auth/oauth/google/callback"/>
+    <default-property name="google.oauth.authorize_url" value="https://accounts.google.com/o/oauth2/v2/auth"/>
+    <default-property name="google.oauth.token_url" value="https://oauth2.googleapis.com/token"/>
+    <default-property name="google.oauth.api_url" value="https://www.googleapis.com/oauth2/v2/userinfo"/>
+    <default-property name="google.oauth.scope" value="openid email profile"/>
+    
+    <!-- WeChat OAuth Settings (Requirements: 2.3.1) -->
+    <!-- To configure: Set environment variables or replace these default values -->
+    <default-property name="wechat.oauth.app_id" value="your_wechat_app_id"/>
+    <default-property name="wechat.oauth.app_secret" value="your_wechat_app_secret"/>
+    <default-property name="wechat.oauth.callback_url" value="http://localhost:8080/rest/s1/novel-anime/auth/oauth/wechat/callback"/>
+    <default-property name="wechat.oauth.qrcode_url" value="https://open.weixin.qq.com/connect/qrconnect"/>
+    <default-property name="wechat.oauth.token_url" value="https://api.weixin.qq.com/sns/oauth2/access_token"/>
+    <default-property name="wechat.oauth.userinfo_url" value="https://api.weixin.qq.com/sns/userinfo"/>
+    <default-property name="wechat.oauth.scope" value="snsapi_login"/>
+    <default-property name="wechat.oauth.qr_expire_seconds" value="600"/>
+    <webapp-list>
+        <webapp name="novel-anime" http-port="8080" https-port="8443" 
+                http-host="*" allow-subdomain-sessions="true">
+            <root-screen host=".*" location="component://novel-anime-generator/screen/NovelAnimeRest.xml"/>
+            
+            <!-- REST API endpoints -->
+            <first-hit-in-visit>
+                <response-header name="Access-Control-Allow-Origin" value="*"/>
+                <response-header name="Access-Control-Allow-Methods" value="GET, POST, PUT, DELETE, OPTIONS"/>
+                <response-header name="Access-Control-Allow-Headers" value="Content-Type, Authorization"/>
+            </first-hit-in-visit>
+        </webapp>
+    </webapp-list>
+
+    <!-- Service configuration -->
+    <service-facade>
+        <service-location name="novel.anime.NovelAnimeServices" location="component://novel-anime-generator/service/NovelAnimeServices.xml"/>
+        <service-location name="novel.anime.NovelAnimeRestServices" location="component://novel-anime-generator/service/NovelAnimeRestServices.xml"/>
+        <service-location name="novel.anime.NovelAnimeAuthServices" location="component://novel-anime-generator/service/NovelAnimeAuthServices.xml"/>
+    </service-facade>
+
+    <!-- Screen configuration -->
+    <screen-facade>
+        <screen-location name="novel-anime-rest" location="component://novel-anime-generator/screen/NovelAnimeRest.xml"/>
+    </screen-facade>
+
+</moqui-conf>
