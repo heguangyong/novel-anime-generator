@@ -1,0 +1,358 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- Episode Generation and Management Services -->
+    
+    <service verb="generate" noun="Episodes" authenticate="anonymous-all">
+        <description>Automatically generate episodes from scenes</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+            <parameter name="targetEpisodeDuration" type="BigDecimal" default="20.0"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="episodesCreated" type="Integer"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <!-- Get chapters for this novel first -->
+            <entity-find entity-name="novel.anime.Chapter" list="chapterList">
+                <econdition field-name="novelId" from="novelId"/>
+            </entity-find>
+            
+            <!-- Get all approved scenes for the novel -->
+            <if condition="chapterList">
+                <entity-find entity-name="novel.anime.Scene" list="sceneList">
+                    <econdition field-name="chapterId" operator="in" from="chapterList.collect { it.chapterId }"/>
+                    <econdition field-name="isApproved" value="Y"/>
+                    <order-by field-name="sceneNumber"/>
+                </entity-find>
+                <else>
+                    <set field="sceneList" from="[]"/>
+                </else>
+            </if>
+            
+            <if condition="sceneList.isEmpty()">
+                <return error="true" message="No approved scenes found for episode generation"/>
+            </if>
+            
+            <!-- Group scenes into episodes -->
+            <service-call name="NovelAnimeEpisodeServices.group#ScenesIntoEpisodes" out-map="groupResult">
+                <field-map field-name="novelId" from="novelId"/>
+                <field-map field-name="scenes" from="sceneList"/>
+                <field-map field-name="targetDuration" from="targetEpisodeDuration"/>
+            </service-call>
+            
+            <set field="success" from="groupResult.success"/>
+            <set field="episodesCreated" from="groupResult.episodesCreated"/>
+            <set field="message" value="Generated ${episodesCreated} episodes"/>
+        </actions>
+    </service>
+
+    <service verb="group" noun="ScenesIntoEpisodes" authenticate="anonymous-all">
+        <description>Group scenes into logical episodes</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+            <parameter name="scenes" type="List" required="true"/>
+            <parameter name="targetDuration" type="BigDecimal" default="20.0"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="episodesCreated" type="Integer"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Simple episode grouping logic (in production, would use AI)
+                def scenes = context.scenes
+                def targetDuration = context.targetDuration
+                def episodes = []
+                def currentEpisode = []
+                def currentDuration = 0.0
+                def episodeNumber = 1
+                
+                // Estimate scene duration based on content length
+                scenes.each { scene ->
+                    def estimatedDuration = Math.max(1.0, scene.content.length() / 100.0) // ~1 minute per 100 characters
+                    
+                    // Check if adding this scene would exceed target duration
+                    if (currentDuration + estimatedDuration > targetDuration && !currentEpisode.isEmpty()) {
+                        // Finalize current episode
+                        episodes.add([
+                            number: episodeNumber++,
+                            scenes: new ArrayList(currentEpisode),
+                            duration: currentDuration,
+                            title: "第${episodeNumber-1}集"
+                        ])
+                        
+                        // Start new episode
+                        currentEpisode.clear()
+                        currentDuration = 0.0
+                    }
+                    
+                    currentEpisode.add(scene)
+                    currentDuration += estimatedDuration
+                }
+                
+                // Add final episode if not empty
+                if (!currentEpisode.isEmpty()) {
+                    episodes.add([
+                        number: episodeNumber,
+                        scenes: currentEpisode,
+                        duration: currentDuration,
+                        title: "第${episodeNumber}集"
+                    ])
+                }
+                
+                context.episodeGroups = episodes
+            ]]></script>
+            
+            <!-- Create episode entities -->
+            <set field="episodesCreated" value="0"/>
+            <iterate list="episodeGroups" entry="episodeGroup">
+                <!-- Generate episode summary -->
+                <script><![CDATA[
+                    def episodeScenes = episodeGroup.scenes
+                    def summary = "本集包含${episodeScenes.size()}个场景："
+                    episodeScenes.eachWithIndex { scene, index ->
+                        if (index < 3) { // Show first 3 scenes
+                            summary += " ${scene.setting}"
+                            if (index < Math.min(2, episodeScenes.size()-1)) summary += "，"
+                        }
+                    }
+                    if (episodeScenes.size() > 3) summary += "等场景"
+                    context.episodeSummary = summary
+                ]]></script>
+                
+                <!-- Create episode -->
+                <service-call name="create#novel.anime.Episode" out-map="episodeResult">
+                    <field-map field-name="novelId" from="novelId"/>
+                    <field-map field-name="episodeNumber" from="episodeGroup.number"/>
+                    <field-map field-name="title" from="episodeGroup.title"/>
+                    <field-map field-name="summary" from="episodeSummary"/>
+                    <field-map field-name="duration" from="episodeGroup.duration"/>
+                    <field-map field-name="status" value="generated"/>
+                    <field-map field-name="createdDate" from="ec.user.nowTimestamp"/>
+                </service-call>
+                
+                <!-- Link scenes to episode -->
+                <set field="sequenceNumber" value="1"/>
+                <iterate list="episodeGroup.scenes" entry="scene">
+                    <service-call name="create#novel.anime.EpisodeScene">
+                        <field-map field-name="episodeId" from="episodeResult.episodeId"/>
+                        <field-map field-name="sceneId" from="scene.sceneId"/>
+                        <field-map field-name="sequenceNumber" from="sequenceNumber"/>
+                    </service-call>
+                    <set field="sequenceNumber" from="sequenceNumber + 1"/>
+                </iterate>
+                
+                <set field="episodesCreated" from="episodesCreated + 1"/>
+            </iterate>
+            
+            <set field="success" value="true"/>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Episodes" authenticate="anonymous-all">
+        <description>Get episode list for a novel</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+            <parameter name="status" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="episodes" type="List"/>
+            <parameter name="totalCount" type="Integer"/>
+        </out-parameters>
+        <actions>
+            <entity-find entity-name="novel.anime.Episode" list="episodeList">
+                <econdition field-name="novelId" from="novelId"/>
+                <econdition field-name="status" from="status" ignore-if-empty="true"/>
+                <order-by field-name="episodeNumber"/>
+            </entity-find>
+            
+            <script><![CDATA[
+                def episodes = episodeList.collect { episode ->
+                    // Find episode scenes
+                    def episodeSceneList = []
+                    ec.entity.find('novel.anime.EpisodeScene')
+                        .condition('episodeId', episode.episodeId)
+                        .orderBy('sequenceNumber')
+                        .list()
+                        .each { episodeScene ->
+                            episodeSceneList.add([
+                                sceneId: episodeScene.sceneId,
+                                sequenceNumber: episodeScene.sequenceNumber
+                            ])
+                        }
+                    
+                    return [
+                        episodeId: episode.episodeId,
+                        episodeNumber: episode.episodeNumber,
+                        title: episode.title,
+                        summary: episode.summary,
+                        duration: episode.duration,
+                        status: episode.status,
+                        sceneCount: episodeSceneList.size(),
+                        scenes: episodeSceneList,
+                        createdDate: episode.createdDate
+                    ]
+                }
+                context.episodes = episodes
+            ]]></script>
+            
+            <set field="totalCount" from="episodeList.size()"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Episode" authenticate="anonymous-all">
+        <description>Update episode information</description>
+        <in-parameters>
+            <parameter name="episodeId" type="String" required="true"/>
+            <parameter name="title" type="String"/>
+            <parameter name="summary" type="String"/>
+            <parameter name="duration" type="BigDecimal"/>
+            <parameter name="status" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Episode" value-field="episodeValue">
+                <field-map field-name="episodeId" from="episodeId"/>
+            </entity-find-one>
+            
+            <if condition="!episodeValue">
+                <return error="true" message="Episode not found"/>
+            </if>
+            
+            <!-- Update episode fields -->
+            <if condition="title"><set field="episodeValue.title" from="title"/></if>
+            <if condition="summary"><set field="episodeValue.summary" from="summary"/></if>
+            <if condition="duration"><set field="episodeValue.duration" from="duration"/></if>
+            <if condition="status"><set field="episodeValue.status" from="status"/></if>
+            
+            <entity-update value-field="episodeValue"/>
+            
+            <set field="success" value="true"/>
+            <set field="message" value="Episode updated successfully"/>
+        </actions>
+    </service>
+
+    <service verb="generate" noun="Screenplay" authenticate="anonymous-all">
+        <description>Generate screenplay for an episode</description>
+        <in-parameters>
+            <parameter name="episodeId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="screenplayId" type="String"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <!-- Get episode and its scenes -->
+            <entity-find-one entity-name="novel.anime.Episode" value-field="episodeValue">
+                <field-map field-name="episodeId" from="episodeId"/>
+            </entity-find-one>
+            
+            <if condition="!episodeValue">
+                <return error="true" message="Episode not found"/>
+            </if>
+            
+            <!-- Get episode scenes in order -->
+            <entity-find entity-name="novel.anime.EpisodeScene" list="episodeSceneList">
+                <econdition field-name="episodeId" from="episodeId"/>
+                <order-by field-name="sequenceNumber"/>
+            </entity-find>
+            
+            <!-- Generate screenplay content -->
+            <script><![CDATA[
+                def screenplay = new StringBuilder()
+                screenplay.append("# ${episodeValue.title}\n\n")
+                screenplay.append("**集数**: ${episodeValue.episodeNumber}\n")
+                screenplay.append("**时长**: ${episodeValue.duration}分钟\n")
+                screenplay.append("**概要**: ${episodeValue.summary}\n\n")
+                screenplay.append("---\n\n")
+                
+                episodeSceneList.eachWithIndex { episodeScene, index ->
+                    // Get scene details
+                    def scene = ec.entity.find('novel.anime.Scene')
+                        .condition('sceneId', episodeScene.sceneId)
+                        .one()
+                    
+                    if (scene) {
+                        screenplay.append("## 场景 ${index + 1}\n\n")
+                        screenplay.append("**设置**: ${scene.setting}\n")
+                        screenplay.append("**情绪**: ${scene.mood}\n")
+                        screenplay.append("**时间**: ${scene.timeOfDay ?: '未知'}\n")
+                        screenplay.append("**天气**: ${scene.weather ?: '晴朗'}\n\n")
+                        
+                        if (scene.visualDescription) {
+                            screenplay.append("**视觉描述**: ${scene.visualDescription}\n\n")
+                        }
+                        
+                        screenplay.append("**内容**:\n")
+                        screenplay.append("${scene.content}\n\n")
+                        screenplay.append("---\n\n")
+                    }
+                }
+                
+                context.screenplayContent = screenplay.toString()
+            ]]></script>
+            
+            <!-- Create screenplay entity -->
+            <service-call name="create#novel.anime.Screenplay" out-map="screenplayResult">
+                <field-map field-name="episodeId" from="episodeId"/>
+                <field-map field-name="content" from="screenplayContent"/>
+                <field-map field-name="format" value="markdown"/>
+                <field-map field-name="createdDate" from="ec.user.nowTimestamp"/>
+            </service-call>
+            
+            <set field="success" value="true"/>
+            <set field="screenplayId" from="screenplayResult.screenplayId"/>
+            <set field="message" value="Screenplay generated successfully"/>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="Episode" authenticate="anonymous-all">
+        <description>Delete episode and related data</description>
+        <in-parameters>
+            <parameter name="episodeId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Episode" value-field="episodeValue">
+                <field-map field-name="episodeId" from="episodeId"/>
+            </entity-find-one>
+            
+            <if condition="!episodeValue">
+                <return error="true" message="Episode not found"/>
+            </if>
+            
+            <!-- Delete episode scenes -->
+            <entity-find entity-name="novel.anime.EpisodeScene" list="episodeSceneList">
+                <econdition field-name="episodeId" from="episodeId"/>
+            </entity-find>
+            <iterate list="episodeSceneList" entry="episodeScene">
+                <entity-delete value-field="episodeScene"/>
+            </iterate>
+            
+            <!-- Delete screenplays -->
+            <entity-find entity-name="novel.anime.Screenplay" list="screenplayList">
+                <econdition field-name="episodeId" from="episodeId"/>
+            </entity-find>
+            <iterate list="screenplayList" entry="screenplay">
+                <entity-delete value-field="screenplay"/>
+            </iterate>
+            
+            <!-- Delete episode -->
+            <entity-delete value-field="episodeValue"/>
+            
+            <set field="success" value="true"/>
+            <set field="message" value="Episode deleted successfully"/>
+        </actions>
+    </service>
+
+</services>

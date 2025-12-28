@@ -1,0 +1,278 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- Processing Pipeline Management Services -->
+    
+    <service verb="create" noun="ProcessingPipeline" authenticate="anonymous-all">
+        <description>Initialize processing pipeline for a novel</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+            <parameter name="estimatedCredits" type="Integer"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="pipeline" type="Map"/>
+            <parameter name="success" type="Boolean"/>
+        </out-parameters>
+        <actions>
+            <!-- Validate novel exists -->
+            <entity-find-one entity-name="novel.anime.Novel" value-field="novelValue">
+                <field-map field-name="novelId" from="novelId"/>
+            </entity-find-one>
+            <if condition="!novelValue">
+                <return error="true" message="Novel not found"/>
+            </if>
+            
+            <!-- Calculate estimated credits if not provided -->
+            <if condition="!estimatedCredits">
+                <script>
+                    // Base cost: 1 credit per 1000 words for import
+                    // Character extraction: 2 credits per 1000 words
+                    // Scene analysis: 3 credits per 1000 words
+                    // Episode generation: 2 credits per 1000 words
+                    def wordCount = novelValue.wordCount ?: 1000
+                    def baseCost = Math.max(1, Math.ceil(wordCount / 1000.0))
+                    context.estimatedCredits = baseCost * 8 // Total multiplier for all stages
+                </script>
+            </if>
+            
+            <!-- Get user and check credits -->
+            <entity-find-one entity-name="novel.anime.Project" value-field="projectValue">
+                <field-map field-name="projectId" from="novelValue.projectId"/>
+            </entity-find-one>
+            <entity-find-one entity-name="novel.anime.user.NovelAnimeUser" value-field="userValue">
+                <field-map field-name="userId" from="projectValue.userId"/>
+            </entity-find-one>
+            
+            <if condition="userValue.credits &lt; estimatedCredits">
+                <return error="true" message="Insufficient credits. Need ${estimatedCredits}, have ${userValue.credits}"/>
+            </if>
+            
+            <!-- Create pipeline -->
+            <service-call name="create#novel.anime.ProcessingPipeline" out-map="createResult">
+                <field-map field-name="novelId" from="novelId"/>
+                <field-map field-name="status" value="running"/>
+                <field-map field-name="currentStage" value="structure_analysis"/>
+                <field-map field-name="totalStages" value="4"/>
+                <field-map field-name="completedStages" value="1"/>
+                <field-map field-name="creditsReserved" from="estimatedCredits"/>
+                <field-map field-name="creditsUsed" value="0"/>
+                <field-map field-name="estimatedDuration" value="300"/>
+                <field-map field-name="startedDate" from="ec.user.nowTimestamp"/>
+            </service-call>
+            
+            <!-- Reserve credits -->
+            <service-call name="NovelAnimeCreditsServices.consume#Credits">
+                <field-map field-name="userId" from="projectValue.userId"/>
+                <field-map field-name="amount" from="estimatedCredits"/>
+                <field-map field-name="operationType" value="pipeline_reserve"/>
+                <field-map field-name="description" value="Reserve credits for processing pipeline"/>
+            </service-call>
+            
+            <entity-find-one entity-name="novel.anime.ProcessingPipeline" value-field="pipelineValue">
+                <field-map field-name="pipelineId" from="createResult.pipelineId"/>
+            </entity-find-one>
+            
+            <set field="pipeline" from="[
+                pipelineId: pipelineValue.pipelineId,
+                novelId: pipelineValue.novelId,
+                status: pipelineValue.status,
+                currentStage: pipelineValue.currentStage,
+                totalStages: pipelineValue.totalStages,
+                completedStages: pipelineValue.completedStages,
+                creditsReserved: pipelineValue.creditsReserved,
+                creditsUsed: pipelineValue.creditsUsed,
+                estimatedDuration: pipelineValue.estimatedDuration,
+                startedDate: pipelineValue.startedDate
+            ]"/>
+            <set field="success" value="true"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="PipelineProgress" authenticate="anonymous-all">
+        <description>Update pipeline progress</description>
+        <in-parameters>
+            <parameter name="pipelineId" type="String" required="true"/>
+            <parameter name="currentStage" type="String"/>
+            <parameter name="completedStages" type="Integer"/>
+            <parameter name="creditsUsed" type="Integer"/>
+            <parameter name="status" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.ProcessingPipeline" value-field="pipelineValue"/>
+            <if condition="pipelineValue">
+                <if condition="currentStage"><set field="pipelineValue.currentStage" from="currentStage"/></if>
+                <if condition="completedStages != null"><set field="pipelineValue.completedStages" from="completedStages"/></if>
+                <if condition="creditsUsed != null"><set field="pipelineValue.creditsUsed" from="creditsUsed"/></if>
+                <if condition="status"><set field="pipelineValue.status" from="status"/></if>
+                
+                <!-- Mark as completed if all stages done -->
+                <if condition="completedStages == pipelineValue.totalStages">
+                    <set field="pipelineValue.status" value="completed"/>
+                    <set field="pipelineValue.completedDate" from="ec.user.nowTimestamp"/>
+                </if>
+                
+                <entity-update value-field="pipelineValue"/>
+                <set field="success" value="true"/>
+                <else>
+                    <set field="success" value="false"/>
+                </else>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="complete" noun="ProcessingPipeline" authenticate="anonymous-all">
+        <description>Complete processing pipeline</description>
+        <in-parameters>
+            <parameter name="pipelineId" type="String" required="true"/>
+            <parameter name="finalCreditsUsed" type="Integer"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="creditsRefunded" type="Integer"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.ProcessingPipeline" value-field="pipelineValue"/>
+            <if condition="!pipelineValue">
+                <return error="true" message="Pipeline not found"/>
+            </if>
+            
+            <!-- Calculate refund -->
+            <script>
+                def refund = (pipelineValue.creditsReserved ?: 0) - (finalCreditsUsed ?: pipelineValue.creditsUsed ?: 0)
+                context.creditsRefunded = Math.max(0, refund)
+            </script>
+            
+            <!-- Update pipeline -->
+            <set field="pipelineValue.status" value="completed"/>
+            <set field="pipelineValue.completedStages" from="pipelineValue.totalStages"/>
+            <set field="pipelineValue.creditsUsed" from="finalCreditsUsed ?: pipelineValue.creditsUsed"/>
+            <set field="pipelineValue.completedDate" from="ec.user.nowTimestamp"/>
+            <entity-update value-field="pipelineValue"/>
+            
+            <!-- Refund unused credits -->
+            <if condition="creditsRefunded > 0">
+                <entity-find-one entity-name="novel.anime.Novel" value-field="novelValue">
+                    <field-map field-name="novelId" from="pipelineValue.novelId"/>
+                </entity-find-one>
+                <entity-find-one entity-name="novel.anime.Project" value-field="projectValue">
+                    <field-map field-name="projectId" from="novelValue.projectId"/>
+                </entity-find-one>
+                
+                <!-- TODO: Implement credit refund service -->
+                <log level="info" message="Would refund ${creditsRefunded} credits to user ${projectValue.userId}"/>
+            </if>
+            
+            <set field="success" value="true"/>
+        </actions>
+    </service>
+
+    <service verb="fail" noun="ProcessingPipeline" authenticate="anonymous-all">
+        <description>Mark processing pipeline as failed</description>
+        <in-parameters>
+            <parameter name="pipelineId" type="String" required="true"/>
+            <parameter name="errorMessage" type="String"/>
+            <parameter name="creditsUsed" type="Integer"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="creditsRefunded" type="Integer"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.ProcessingPipeline" value-field="pipelineValue"/>
+            <if condition="!pipelineValue">
+                <return error="true" message="Pipeline not found"/>
+            </if>
+            
+            <!-- Calculate refund (refund most credits on failure) -->
+            <script>
+                def usedCredits = creditsUsed ?: (pipelineValue.creditsUsed ?: 0)
+                def refund = (pipelineValue.creditsReserved ?: 0) - usedCredits
+                context.creditsRefunded = Math.max(0, refund)
+            </script>
+            
+            <!-- Update pipeline -->
+            <set field="pipelineValue.status" value="failed"/>
+            <set field="pipelineValue.creditsUsed" from="creditsUsed ?: pipelineValue.creditsUsed"/>
+            <set field="pipelineValue.completedDate" from="ec.user.nowTimestamp"/>
+            <entity-update value-field="pipelineValue"/>
+            
+            <!-- Create error stage record -->
+            <service-call name="create#novel.anime.ProcessingStage">
+                <field-map field-name="pipelineId" from="pipelineId"/>
+                <field-map field-name="stageName" value="error"/>
+                <field-map field-name="status" value="failed"/>
+                <field-map field-name="progress" value="0"/>
+                <field-map field-name="errorMessage" from="errorMessage"/>
+                <field-map field-name="startedDate" from="ec.user.nowTimestamp"/>
+                <field-map field-name="completedDate" from="ec.user.nowTimestamp"/>
+            </service-call>
+            
+            <!-- Refund credits -->
+            <if condition="creditsRefunded > 0">
+                <entity-find-one entity-name="novel.anime.Novel" value-field="novelValue">
+                    <field-map field-name="novelId" from="pipelineValue.novelId"/>
+                </entity-find-one>
+                <entity-find-one entity-name="novel.anime.Project" value-field="projectValue">
+                    <field-map field-name="projectId" from="novelValue.projectId"/>
+                </entity-find-one>
+                
+                <!-- TODO: Implement credit refund service -->
+                <log level="info" message="Would refund ${creditsRefunded} credits to user ${projectValue.userId}"/>
+            </if>
+            
+            <set field="success" value="true"/>
+        </actions>
+    </service>
+
+    <service verb="get" noun="PipelineStatus" authenticate="anonymous-all">
+        <description>Get processing pipeline status</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="pipeline" type="Map"/>
+            <parameter name="stages" type="List"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.ProcessingPipeline" value-field="pipelineValue">
+                <field-map field-name="novelId" from="novelId"/>
+            </entity-find-one>
+            
+            <if condition="pipelineValue">
+                <set field="pipeline" from="[
+                    pipelineId: pipelineValue.pipelineId,
+                    novelId: pipelineValue.novelId,
+                    status: pipelineValue.status,
+                    currentStage: pipelineValue.currentStage,
+                    totalStages: pipelineValue.totalStages,
+                    completedStages: pipelineValue.completedStages,
+                    creditsReserved: pipelineValue.creditsReserved,
+                    creditsUsed: pipelineValue.creditsUsed,
+                    estimatedDuration: pipelineValue.estimatedDuration,
+                    startedDate: pipelineValue.startedDate,
+                    completedDate: pipelineValue.completedDate
+                ]"/>
+                
+                <!-- Get stage details -->
+                <entity-find entity-name="novel.anime.ProcessingStage" list="stageList">
+                    <econdition field-name="pipelineId" from="pipelineValue.pipelineId"/>
+                    <order-by field-name="startedDate"/>
+                </entity-find>
+                
+                <set field="stages" from="stageList.collect { [
+                    stageId: it.stageId,
+                    stageName: it.stageName,
+                    status: it.status,
+                    progress: it.progress,
+                    errorMessage: it.errorMessage,
+                    startedDate: it.startedDate,
+                    completedDate: it.completedDate
+                ] }"/>
+            </if>
+        </actions>
+    </service>
+
+</services>

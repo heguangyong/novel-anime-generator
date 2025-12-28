@@ -13,6 +13,61 @@
         <service-call name="novel.anime.NovelAnimeServices.parse#Novel" web-send-json-response="resultMap"/>
     </transition>
     
+    <!-- Project Management Transitions -->
+    <transition name="projects" method="post">
+        <service-call name="novel.anime.NovelAnimeRestServices.create#Project" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="projects" method="get">
+        <service-call name="novel.anime.NovelAnimeRestServices.get#Projects" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="project" method="get">
+        <parameter name="projectId" from="sri.screenUrlInfo.extraPathNameList?.get(0)"/>
+        <service-call name="novel.anime.NovelAnimeRestServices.get#Project" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="project" method="put">
+        <parameter name="projectId" from="sri.screenUrlInfo.extraPathNameList?.get(0)"/>
+        <service-call name="novel.anime.NovelAnimeRestServices.update#Project" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="project" method="delete">
+        <parameter name="projectId" from="sri.screenUrlInfo.extraPathNameList?.get(0)"/>
+        <service-call name="novel.anime.NovelAnimeRestServices.delete#Project" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <!-- Novel Import Transitions -->
+    <transition name="novels/import-text" method="post">
+        <service-call name="novel.anime.NovelAnimeRestServices.create#NovelFromText" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="novels/import-file" method="post">
+        <service-call name="novel.anime.NovelAnimeRestServices.create#NovelFromFile" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <!-- Processing Pipeline Transitions -->
+    <transition name="novels/pipeline/status" method="get">
+        <parameter name="novelId" from="sri.screenUrlInfo.extraPathNameList?.get(0)"/>
+        <service-call name="novel.anime.NovelAnimePipelineServices.get#PipelineStatus" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="novels/pipeline/create" method="post">
+        <service-call name="novel.anime.NovelAnimePipelineServices.create#ProcessingPipeline" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="novels/pipeline/update" method="put">
+        <service-call name="novel.anime.NovelAnimePipelineServices.update#PipelineProgress" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="novels/pipeline/complete" method="post">
+        <service-call name="novel.anime.NovelAnimePipelineServices.complete#ProcessingPipeline" web-send-json-response="resultMap"/>
+    </transition>
+    
+    <transition name="novels/pipeline/fail" method="post">
+        <service-call name="novel.anime.NovelAnimePipelineServices.fail#ProcessingPipeline" web-send-json-response="resultMap"/>
+    </transition>
+    
     <transition name="novel" method="get">
         <parameter name="novelId" from="sri.screenUrlInfo.extraPathNameList?.get(0)"/>
         <service-call name="novel.anime.NovelAnimeRestServices.get#Novel" web-send-json-response="resultMap"/>

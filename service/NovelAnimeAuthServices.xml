@@ -5,9 +5,9 @@
 
     <!-- User Registration Service -->
     <service verb="register" noun="User" authenticate="false">
-        <description>Register a new user with email and password. Validates email format and uniqueness, 
-        hashes password securely, creates user with 500 initial credits, and returns JWT token on success.
-        Requirements: 1.1, 1.2, 1.3, 1.4, 1.5</description>
+        <description>Register a new user with email and password using Moqui's UserAccount for authentication.
+        Creates UserAccount first, then NovelAnimeUser with 500 initial credits, and returns JWT token on success.
+        Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.1</description>
         <in-parameters>
             <parameter name="email" required="true">
                 <description>User email address (must be valid format and unique)</description>
@@ -31,8 +31,6 @@
         </out-parameters>
         <actions>
             <script><![CDATA[
-                import java.security.MessageDigest
-                import java.security.SecureRandom
                 import java.util.Base64
                 import java.util.regex.Pattern
                 import javax.crypto.Mac
@@ -60,50 +58,58 @@
                     return
                 }
 
-                // Check email uniqueness (Requirement 1.2)
-                def existingUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
-                    .condition("email", email.toLowerCase().trim())
-                    .disableAuthz()
-                    .one()
-
-                if (existingUser) {
-                    success = false
-                    message = "This email is already registered. Please use a different email or login."
-                    errorCode = "EMAIL_EXISTS"
-                    return
-                }
+                def normalizedEmail = email.toLowerCase().trim()
+                def displayName = username ?: normalizedEmail.split('@')[0]
 
                 try {
-                    // Disable authorization for entity creation
                     ec.artifactExecution.disableAuthz()
-                    
-                    // Generate secure password hash using SHA-256 with salt
-                    def random = new SecureRandom()
-                    def saltBytes = new byte[16]
-                    random.nextBytes(saltBytes)
-                    def salt = Base64.encoder.encodeToString(saltBytes)
 
-                    def md = MessageDigest.getInstance("SHA-256")
-                    md.update(saltBytes)
-                    def hashedPassword = Base64.encoder.encodeToString(md.digest(password.getBytes(StandardCharsets.UTF_8)))
-                    def passwordHash = salt + ":" + hashedPassword
+                    // Check if UserAccount already exists with this email (Requirement 1.2)
+                    def existingUserAccount = ec.entity.find("moqui.security.UserAccount")
+                        .condition("emailAddress", normalizedEmail)
+                        .one()
+
+                    if (existingUserAccount) {
+                        ec.artifactExecution.enableAuthz()
+                        success = false
+                        message = "This email is already registered. Please use a different email or login."
+                        errorCode = "EMAIL_EXISTS"
+                        return
+                    }
+
+                    // Also check by username (use email prefix as username)
+                    def usernameToUse = displayName
+                    def existingByUsername = ec.entity.find("moqui.security.UserAccount")
+                        .condition("username", usernameToUse)
+                        .one()
+                    
+                    // If username exists, append random suffix
+                    if (existingByUsername) {
+                        usernameToUse = displayName + "_" + System.currentTimeMillis().toString()[-4..-1]
+                    }
 
                     // Generate user ID
                     userId = UUID.randomUUID().toString()
-
-                    // Create user with 500 initial credits (Requirement 1.1)
                     def now = ec.user.nowTimestamp
-                    def displayName = username ?: email.split('@')[0]
 
+                    // Create UserAccount using Moqui's built-in mechanism (Requirement 2.1)
+                    ec.entity.makeValue("moqui.security.UserAccount").setAll([
+                        userId: userId,
+                        username: usernameToUse,
+                        emailAddress: normalizedEmail,
+                        userFullName: displayName,
+                        currentPassword: org.moqui.impl.context.UserFacadeImpl.getPasswordHash(password),
+                        passwordSetDate: now,
+                        disabled: 'N',
+                        requirePasswordChange: 'N'
+                    ]).create()
+
+                    // Create NovelAnimeUser with 500 initial credits (Requirement 1.1)
                     ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
                         userId: userId,
-                        email: email.toLowerCase().trim(),
-                        username: displayName,
-                        passwordHash: passwordHash,
                         avatarUrl: null,
                         credits: 500,
                         status: 'active',
-                        authProvider: 'local',
                         createdDate: now,
                         lastLoginDate: now
                     ]).create()
@@ -120,7 +126,6 @@
                         timestamp: now
                     ]).create()
                     
-                    // Re-enable authorization
                     ec.artifactExecution.enableAuthz()
 
                     // Generate JWT tokens (Requirement 1.5 - auto login)
@@ -128,22 +133,16 @@
                     def accessExpiryTime = Instant.now().plusSeconds(3600) // 1 hour
                     def refreshExpiryTime = Instant.now().plusSeconds(604800) // 7 days
 
-                    // Create JWT Header
-                    def header = new JsonBuilder([
-                        alg: "HS256",
-                        typ: "JWT"
-                    ]).toString()
+                    def header = new JsonBuilder([alg: "HS256", typ: "JWT"]).toString()
 
-                    // Create Access Token payload
                     def accessPayload = new JsonBuilder([
                         sub: userId,
-                        email: email.toLowerCase().trim(),
+                        email: normalizedEmail,
                         iat: Instant.now().epochSecond,
                         exp: accessExpiryTime.epochSecond,
                         type: "access"
                     ]).toString()
 
-                    // Create Refresh Token payload
                     def refreshPayload = new JsonBuilder([
                         sub: userId,
                         iat: Instant.now().epochSecond,
@@ -151,12 +150,10 @@
                         type: "refresh"
                     ]).toString()
 
-                    // Base64 encode
                     def encodedHeader = Base64.urlEncoder.withoutPadding().encodeToString(header.getBytes(StandardCharsets.UTF_8))
                     def encodedAccessPayload = Base64.urlEncoder.withoutPadding().encodeToString(accessPayload.getBytes(StandardCharsets.UTF_8))
                     def encodedRefreshPayload = Base64.urlEncoder.withoutPadding().encodeToString(refreshPayload.getBytes(StandardCharsets.UTF_8))
 
-                    // Create signatures
                     def mac = Mac.getInstance("HmacSHA256")
                     def secretKey = new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
                     mac.init(secretKey)
@@ -173,23 +170,25 @@
                     refreshToken = refreshTokenData + "." + refreshSignature
                     expiresIn = 3600L
 
-                    // Build user response object
+                    // Build user response object (combined from UserAccount and NovelAnimeUser)
                     user = [
                         userId: userId,
-                        email: email.toLowerCase().trim(),
-                        username: displayName,
+                        username: usernameToUse,
+                        email: normalizedEmail,
+                        fullName: displayName,
                         credits: 500,
                         avatarUrl: null,
-                        authProvider: 'local',
+                        status: 'active',
                         createdDate: now.toString()
                     ]
 
                     success = true
                     message = "Registration successful. Welcome to Novel Anime!"
 
-                    ec.logger.info("User registered successfully: ${email}")
+                    ec.logger.info("User registered successfully: ${normalizedEmail} (userId: ${userId})")
 
                 } catch (Exception e) {
+                    ec.artifactExecution.enableAuthz()
                     ec.logger.error("User registration failed for ${email}", e)
                     success = false
                     message = "Registration failed: " + e.message
@@ -201,12 +200,15 @@
 
     <!-- User Login Service -->
     <service verb="login" noun="User" authenticate="false">
-        <description>Authenticate user with email and password. Validates credentials against stored hash,
-        generates and returns JWT token, and updates lastLoginDate.
-        Requirements: 2.1, 2.2</description>
+        <description>Authenticate user with username/email and password using Moqui's built-in authentication.
+        Auto-creates NovelAnimeUser record if not exists, generates JWT token, and updates lastLoginDate.
+        Requirements: 2.1, 2.2, 2.3, 2.4</description>
         <in-parameters>
-            <parameter name="email" required="true">
-                <description>User email address</description>
+            <parameter name="username">
+                <description>Username or email address for login</description>
+            </parameter>
+            <parameter name="email">
+                <description>Email address (alternative to username)</description>
             </parameter>
             <parameter name="password" required="true">
                 <description>User password</description>
@@ -223,114 +225,173 @@
         </out-parameters>
         <actions>
             <script><![CDATA[
-                import java.security.MessageDigest
-                import java.util.Base64
                 import javax.crypto.Mac
                 import javax.crypto.spec.SecretKeySpec
+                import java.util.Base64
                 import java.time.Instant
                 import java.nio.charset.StandardCharsets
                 import groovy.json.JsonBuilder
-
-                // Find user by email
-                def userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
-                    .condition("email", email.toLowerCase().trim())
-                    .disableAuthz()
-                    .one()
-
-                if (!userRecord) {
+                
+                // Requirement 2.1: Authenticate against UserAccount using Moqui's built-in authentication
+                
+                // Determine login identifier (username or email)
+                def loginId = username ?: email
+                ec.logger.info("Login attempt for: ${loginId}")
+                
+                if (!loginId) {
                     success = false
-                    message = "Invalid email or password."
-                    errorCode = "INVALID_CREDENTIALS"
+                    message = "Username or email is required."
+                    errorCode = "MISSING_CREDENTIALS"
                     return
                 }
-
-                // Check if user is active
-                if (userRecord.status != 'active') {
+                
+                if (!password) {
                     success = false
-                    message = "Your account is not active. Please contact support."
-                    errorCode = "ACCOUNT_INACTIVE"
-                    return
-                }
-
-                // Check if user has a password (OAuth users don't)
-                if (!userRecord.passwordHash) {
-                    success = false
-                    message = "This account uses social login. Please use the appropriate login method."
-                    errorCode = "OAUTH_ACCOUNT"
+                    message = "Password is required."
+                    errorCode = "MISSING_PASSWORD"
                     return
                 }
 
                 try {
-                    // Verify password
-                    def storedHash = userRecord.passwordHash
-                    def parts = storedHash.split(':')
-                    
-                    if (parts.length != 2) {
-                        success = false
-                        message = "Invalid email or password."
-                        errorCode = "INVALID_CREDENTIALS"
-                        return
-                    }
-
-                    def salt = parts[0]
-                    def expectedHash = parts[1]
-
-                    // Hash the provided password with the stored salt
-                    def saltBytes = Base64.decoder.decode(salt)
-                    def md = MessageDigest.getInstance("SHA-256")
-                    md.update(saltBytes)
-                    def computedHash = Base64.encoder.encodeToString(md.digest(password.getBytes(StandardCharsets.UTF_8)))
-
-                    // Compare hashes (Requirement 2.2 - invalid credentials rejection)
-                    if (computedHash != expectedHash) {
-                        success = false
-                        message = "Invalid email or password."
-                        errorCode = "INVALID_CREDENTIALS"
-                        ec.logger.warn("Failed login attempt for email: ${email}")
-                        return
-                    }
-
-                    // Update lastLoginDate
-                    def now = ec.user.nowTimestamp
+                    // First, verify the user exists before attempting login
                     ec.artifactExecution.disableAuthz()
-                    userRecord.lastLoginDate = now
-                    userRecord.update()
+                    def userAccount = ec.entity.find("moqui.security.UserAccount")
+                        .condition("username", loginId)
+                        .one()
+                    
+                    // If not found by username, try by email
+                    if (!userAccount) {
+                        userAccount = ec.entity.find("moqui.security.UserAccount")
+                            .condition("emailAddress", loginId)
+                            .one()
+                    }
+                    ec.artifactExecution.enableAuthz()
+                    
+                    if (!userAccount) {
+                        success = false
+                        message = "Invalid username/email or password."
+                        errorCode = "INVALID_CREDENTIALS"
+                        ec.logger.warn("User not found for login: ${loginId}")
+                        return
+                    }
+                    
+                    ec.logger.info("Found user account: ${userAccount.username}, userId: ${userAccount.userId}")
+                    
+                    // Try to login using Moqui's built-in authentication (Requirement 2.1)
+                    def loggedIn = ec.user.loginUser(userAccount.username, password)
+                    
+                    if (!loggedIn) {
+                        success = false
+                        message = "Invalid username/email or password."
+                        errorCode = "INVALID_CREDENTIALS"
+                        ec.logger.warn("Failed login attempt for: ${loginId}")
+                        return
+                    }
+
+                    // Get the authenticated user's ID
+                    def userId = ec.user.userId
+                    def now = ec.user.nowTimestamp
+                    if (!now) {
+                        now = new java.sql.Timestamp(System.currentTimeMillis())
+                    }
+                    ec.logger.info("Login - userId: ${userId}, now: ${now}")
+
+                    // Requirement 2.2: Check if NovelAnimeUser record exists
+                    ec.artifactExecution.disableAuthz()
+                    def novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        .condition("userId", userId)
+                        .one()
+
+                    // Requirement 2.3: Auto-create NovelAnimeUser if not exists with 500 default credits
+                    if (!novelAnimeUser) {
+                        ec.logger.info("Creating NovelAnimeUser for userId: ${userId}, email: ${userAccount?.emailAddress}, now: ${now}")
+                        try {
+                            // Use service call instead of direct entity creation for better error handling
+                            def createResult = ec.service.sync().name("create#novel.anime.user.NovelAnimeUser")
+                                .parameters([
+                                    userId: userId,
+                                    email: userAccount?.emailAddress ?: '',
+                                    avatarUrl: null,
+                                    credits: 500,
+                                    status: 'active',
+                                    createdDate: now,
+                                    lastLoginDate: now
+                                ])
+                                .disableAuthz()
+                                .call()
+                            
+                            ec.logger.info("NovelAnimeUser create result: ${createResult}")
+                            
+                            // Fetch the created record
+                            novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                                .condition("userId", userId)
+                                .one()
+
+                            // Record initial credits transaction
+                            def txnId = UUID.randomUUID().toString()
+                            ec.service.sync().name("create#novel.anime.user.CreditTransaction")
+                                .parameters([
+                                    transactionId: txnId,
+                                    userId: userId,
+                                    amount: 500,
+                                    type: 'initial',
+                                    operationType: 'registration',
+                                    description: 'Initial credits on first login',
+                                    balanceAfter: 500,
+                                    timestamp: now
+                                ])
+                                .disableAuthz()
+                                .call()
+
+                            ec.logger.info("NovelAnimeUser created with 500 initial credits for userId: ${userId}")
+                        } catch (Exception createEx) {
+                            ec.logger.error("Failed to create NovelAnimeUser: ${createEx.message}", createEx)
+                            // Continue without NovelAnimeUser - user can still login
+                            novelAnimeUser = null
+                        }
+                    } else {
+                        // Update lastLoginDate
+                        novelAnimeUser.lastLoginDate = now
+                        novelAnimeUser.update()
+                    }
+
+                    // Check if NovelAnimeUser is active (skip if creation failed)
+                    if (novelAnimeUser && novelAnimeUser.status != 'active') {
+                        ec.user.logoutUser()
+                        ec.artifactExecution.enableAuthz()
+                        success = false
+                        message = "Your account is not active. Please contact support."
+                        errorCode = "ACCOUNT_INACTIVE"
+                        return
+                    }
+
+                    // userAccount was already fetched at the beginning of login
                     ec.artifactExecution.enableAuthz()
 
-                    // Generate JWT tokens (Requirement 2.1 - store Auth_Token)
+                    // Generate JWT tokens
                     def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
-                    def accessExpiryTime = Instant.now().plusSeconds(3600) // 1 hour
-                    def refreshExpiryTime = Instant.now().plusSeconds(604800) // 7 days
+                    def accessExpiryTime = Instant.now().plusSeconds(3600)
+                    def refreshExpiryTime = Instant.now().plusSeconds(604800)
 
-                    // Create JWT Header
-                    def header = new JsonBuilder([
-                        alg: "HS256",
-                        typ: "JWT"
-                    ]).toString()
-
-                    // Create Access Token payload
+                    def header = new JsonBuilder([alg: "HS256", typ: "JWT"]).toString()
                     def accessPayload = new JsonBuilder([
-                        sub: userRecord.userId,
-                        email: userRecord.email,
+                        sub: userId,
+                        email: userAccount?.emailAddress,
                         iat: Instant.now().epochSecond,
                         exp: accessExpiryTime.epochSecond,
                         type: "access"
                     ]).toString()
-
-                    // Create Refresh Token payload
                     def refreshPayload = new JsonBuilder([
-                        sub: userRecord.userId,
+                        sub: userId,
                         iat: Instant.now().epochSecond,
                         exp: refreshExpiryTime.epochSecond,
                         type: "refresh"
                     ]).toString()
 
-                    // Base64 encode
                     def encodedHeader = Base64.urlEncoder.withoutPadding().encodeToString(header.getBytes(StandardCharsets.UTF_8))
                     def encodedAccessPayload = Base64.urlEncoder.withoutPadding().encodeToString(accessPayload.getBytes(StandardCharsets.UTF_8))
                     def encodedRefreshPayload = Base64.urlEncoder.withoutPadding().encodeToString(refreshPayload.getBytes(StandardCharsets.UTF_8))
 
-                    // Create signatures
                     def mac = Mac.getInstance("HmacSHA256")
                     def secretKey = new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
                     mac.init(secretKey)
@@ -347,25 +408,26 @@
                     refreshToken = refreshTokenData + "." + refreshSignature
                     expiresIn = 3600L
 
-                    // Build user response object
+                    // Requirement 2.4: Return combined user information from UserAccount and NovelAnimeUser
                     user = [
-                        userId: userRecord.userId,
-                        email: userRecord.email,
-                        username: userRecord.username,
-                        credits: userRecord.credits,
-                        avatarUrl: userRecord.avatarUrl,
-                        authProvider: userRecord.authProvider,
-                        createdDate: userRecord.createdDate?.toString(),
+                        userId: userId,
+                        username: userAccount?.username,
+                        email: userAccount?.emailAddress,
+                        fullName: userAccount?.userFullName,
+                        credits: novelAnimeUser?.credits ?: 500,
+                        avatarUrl: novelAnimeUser?.avatarUrl,
+                        status: novelAnimeUser?.status ?: 'active',
+                        createdDate: novelAnimeUser?.createdDate?.toString(),
                         lastLoginDate: now.toString()
                     ]
 
                     success = true
                     message = "Login successful."
 
-                    ec.logger.info("User logged in successfully: ${email}")
+                    ec.logger.info("User logged in successfully: ${loginId} (userId: ${userId})")
 
                 } catch (Exception e) {
-                    ec.logger.error("Login failed for ${email}", e)
+                    ec.logger.error("Login failed for ${loginId ?: email}", e)
                     success = false
                     message = "Login failed: " + e.message
                     errorCode = "LOGIN_ERROR"
@@ -376,7 +438,7 @@
 
     <!-- Token Validation Service -->
     <service verb="validate" noun="Token" authenticate="false">
-        <description>Verify JWT signature and expiration. Returns user info including credits balance.
+        <description>Verify JWT signature and expiration. Returns combined user info from UserAccount and NovelAnimeUser.
         Requirements: 2.3, 2.4</description>
         <in-parameters>
             <parameter name="token">
@@ -416,7 +478,8 @@
                 }
 
                 try {
-                    // Parse JWT token
+                    // Use manual JWT validation with our secret key
+                    // (JwtUtil uses a different default secret, so we validate manually)
                     def parts = jwtToken.split('\\.')
                     if (parts.length != 3) {
                         valid = false
@@ -429,7 +492,6 @@
                     def encodedPayload = parts[1]
                     def signature = parts[2]
 
-                    // Verify signature
                     def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
                     def mac = Mac.getInstance("HmacSHA256")
                     def secretKey = new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
@@ -445,11 +507,9 @@
                         return
                     }
 
-                    // Decode payload
                     def payloadJson = new String(Base64.urlDecoder.decode(encodedPayload), StandardCharsets.UTF_8)
                     def payload = new JsonSlurper().parseText(payloadJson)
 
-                    // Check expiration (Requirement 2.4 - token expired handling)
                     def expTime = payload.exp as Long
                     if (Instant.now().epochSecond > expTime) {
                         valid = false
@@ -458,7 +518,6 @@
                         return
                     }
 
-                    // Check token type
                     if (payload.type != 'access') {
                         valid = false
                         message = "Invalid token type."
@@ -466,38 +525,71 @@
                         return
                     }
 
-                    // Get user from database (Requirement 2.3 - load user profile with credits)
                     userId = payload.sub
-                    def userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+
+                    // Get combined user data from UserAccount and NovelAnimeUser (Requirement 2.3, 2.4)
+                    ec.artifactExecution.disableAuthz()
+                    
+                    def userAccount = ec.entity.find("moqui.security.UserAccount")
                         .condition("userId", userId)
-                        .disableAuthz()
                         .one()
 
-                    if (!userRecord) {
+                    if (!userAccount) {
+                        ec.artifactExecution.enableAuthz()
                         valid = false
                         message = "User not found."
                         errorCode = "USER_NOT_FOUND"
                         return
                     }
 
-                    if (userRecord.status != 'active') {
+                    def novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        .condition("userId", userId)
+                        .one()
+
+                    // Auto-create NovelAnimeUser if not exists
+                    if (!novelAnimeUser) {
+                        def now = ec.user.nowTimestamp
+                        novelAnimeUser = ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                            userId: userId,
+                            credits: 500,
+                            status: 'active',
+                            createdDate: now,
+                            lastLoginDate: now
+                        ])
+                        novelAnimeUser.create()
+
+                        ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
+                            transactionId: UUID.randomUUID().toString(),
+                            userId: userId,
+                            amount: 500,
+                            type: 'initial',
+                            operationType: 'token_validation',
+                            description: 'Initial credits on first token validation',
+                            balanceAfter: 500,
+                            timestamp: now
+                        ]).create()
+                    }
+
+                    ec.artifactExecution.enableAuthz()
+
+                    if (novelAnimeUser.status != 'active') {
                         valid = false
                         message = "User account is not active."
                         errorCode = "ACCOUNT_INACTIVE"
                         return
                     }
 
-                    // Build user response with credits balance
+                    // Build combined user response
                     user = [
-                        userId: userRecord.userId,
-                        email: userRecord.email,
-                        username: userRecord.username,
-                        credits: userRecord.credits,
-                        avatarUrl: userRecord.avatarUrl,
-                        authProvider: userRecord.authProvider,
-                        status: userRecord.status,
-                        createdDate: userRecord.createdDate?.toString(),
-                        lastLoginDate: userRecord.lastLoginDate?.toString()
+                        userId: userId,
+                        username: userAccount.username,
+                        email: userAccount.emailAddress,
+                        fullName: userAccount.userFullName,
+                        credits: novelAnimeUser.credits,
+                        avatarUrl: novelAnimeUser.avatarUrl,
+                        status: novelAnimeUser.status,
+                        createdDate: novelAnimeUser.createdDate?.toString(),
+                        lastLoginDate: novelAnimeUser.lastLoginDate?.toString()
                     ]
 
                     valid = true
@@ -566,6 +658,203 @@
                     // Still return success since the client should clear their token
                     success = true
                     message = "Logout completed."
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- User Profile Service -->
+    <service verb="get" noun="UserProfile" authenticate="false">
+        <description>Get user profile by joining UserAccount and NovelAnimeUser data.
+        Returns combined user information including username, email from UserAccount
+        and credits, avatarUrl, status from NovelAnimeUser.
+        Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6</description>
+        <in-parameters>
+            <parameter name="userId">
+                <description>User ID (optional - will be extracted from JWT token if not provided)</description>
+            </parameter>
+            <parameter name="token">
+                <description>JWT access token (optional - will be extracted from Authorization header if not provided)</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.util.Base64
+                import javax.crypto.Mac
+                import javax.crypto.spec.SecretKeySpec
+                import java.nio.charset.StandardCharsets
+                import java.time.Instant
+                import groovy.json.JsonSlurper
+
+                def targetUserId = userId
+
+                // If userId not provided, extract from JWT token
+                if (!targetUserId) {
+                    def jwtToken = token
+                    if (!jwtToken && ec.web?.request) {
+                        def authHeader = ec.web.request.getHeader("Authorization")
+                        if (authHeader && authHeader.startsWith("Bearer ")) {
+                            jwtToken = authHeader.substring(7)
+                        }
+                    }
+
+                    if (!jwtToken) {
+                        success = false
+                        message = "No user ID or token provided."
+                        errorCode = "NO_USER_ID"
+                        return
+                    }
+
+                    try {
+                        // Try using JwtUtil first
+                        def clientIp = ec.web?.request?.getRemoteAddr()
+                        
+                        try {
+                            Class.forName('org.moqui.jwt.JwtUtil')
+                            def validationResult = org.moqui.jwt.JwtUtil.validateToken(jwtToken, clientIp)
+                            
+                            if (!validationResult.isValid()) {
+                                success = false
+                                message = validationResult.getMessage()
+                                errorCode = "INVALID_TOKEN"
+                                return
+                            }
+                            targetUserId = validationResult.getUserId()
+                        } catch (ClassNotFoundException cnfe) {
+                            // Fallback to manual JWT parsing
+                            def parts = jwtToken.split('\\.')
+                            if (parts.length != 3) {
+                                success = false
+                                message = "Invalid token format."
+                                errorCode = "INVALID_TOKEN_FORMAT"
+                                return
+                            }
+
+                            def encodedPayload = parts[1]
+                            def signature = parts[2]
+
+                            // Verify signature
+                            def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
+                            def mac = Mac.getInstance("HmacSHA256")
+                            def secretKey = new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
+                            mac.init(secretKey)
+
+                            def tokenData = parts[0] + "." + encodedPayload
+                            def expectedSignature = Base64.urlEncoder.withoutPadding().encodeToString(mac.doFinal(tokenData.getBytes(StandardCharsets.UTF_8)))
+
+                            if (signature != expectedSignature) {
+                                success = false
+                                message = "Invalid token signature."
+                                errorCode = "INVALID_SIGNATURE"
+                                return
+                            }
+
+                            def payloadJson = new String(Base64.urlDecoder.decode(encodedPayload), StandardCharsets.UTF_8)
+                            def payload = new JsonSlurper().parseText(payloadJson)
+
+                            // Check expiration
+                            def expTime = payload.exp as Long
+                            if (Instant.now().epochSecond > expTime) {
+                                success = false
+                                message = "Token has expired."
+                                errorCode = "TOKEN_EXPIRED"
+                                return
+                            }
+
+                            targetUserId = payload.sub
+                        }
+                    } catch (Exception e) {
+                        ec.logger.error("Token parsing failed", e)
+                        success = false
+                        message = "Invalid token: " + e.message
+                        errorCode = "TOKEN_ERROR"
+                        return
+                    }
+                }
+
+                try {
+                    ec.artifactExecution.disableAuthz()
+
+                    // Requirement 3.1: Join UserAccount and NovelAnimeUser data
+                    // Requirement 3.2: Get username from UserAccount
+                    // Requirement 3.3: Get emailAddress from UserAccount
+                    def userAccount = ec.entity.find("moqui.security.UserAccount")
+                        .condition("userId", targetUserId)
+                        .one()
+
+                    if (!userAccount) {
+                        ec.artifactExecution.enableAuthz()
+                        success = false
+                        message = "User not found."
+                        errorCode = "USER_NOT_FOUND"
+                        return
+                    }
+
+                    // Requirement 3.4: Get credits from NovelAnimeUser
+                    // Requirement 3.5: Get avatarUrl from NovelAnimeUser
+                    // Requirement 3.6: Get status from NovelAnimeUser
+                    def novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        .condition("userId", targetUserId)
+                        .one()
+
+                    // Auto-create NovelAnimeUser if not exists (for users who haven't logged in via NovelAnime yet)
+                    if (!novelAnimeUser) {
+                        def now = ec.user.nowTimestamp
+                        novelAnimeUser = ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                            userId: targetUserId,
+                            credits: 500,
+                            status: 'active',
+                            createdDate: now,
+                            lastLoginDate: now
+                        ])
+                        novelAnimeUser.create()
+
+                        // Record initial credits transaction
+                        ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
+                            transactionId: UUID.randomUUID().toString(),
+                            userId: targetUserId,
+                            amount: 500,
+                            type: 'initial',
+                            operationType: 'profile_access',
+                            description: 'Initial credits on first profile access',
+                            balanceAfter: 500,
+                            timestamp: now
+                        ]).create()
+
+                        ec.logger.info("NovelAnimeUser auto-created for userId: ${targetUserId}")
+                    }
+
+                    ec.artifactExecution.enableAuthz()
+
+                    // Build combined user profile response
+                    user = [
+                        userId: targetUserId,
+                        username: userAccount.username,                    // Requirement 3.2
+                        email: userAccount.emailAddress,                   // Requirement 3.3
+                        fullName: userAccount.userFullName,
+                        credits: novelAnimeUser.credits,                   // Requirement 3.4
+                        avatarUrl: novelAnimeUser.avatarUrl,               // Requirement 3.5
+                        status: novelAnimeUser.status,                     // Requirement 3.6
+                        locale: userAccount.locale,
+                        timeZone: userAccount.timeZone,
+                        createdDate: novelAnimeUser.createdDate?.toString(),
+                        lastLoginDate: novelAnimeUser.lastLoginDate?.toString()
+                    ]
+
+                    success = true
+                    message = "Profile retrieved successfully."
+
+                } catch (Exception e) {
+                    ec.logger.error("Failed to get user profile for userId: ${targetUserId}", e)
+                    success = false
+                    message = "Failed to retrieve profile: " + e.message
+                    errorCode = "PROFILE_ERROR"
                 }
             ]]></script>
         </actions>
@@ -650,19 +939,35 @@
                         return
                     }
 
-                    // Get user from database
+                    // Get user from database - first get UserAccount, then NovelAnimeUser
                     def userId = payload.sub
-                    def userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                    ec.artifactExecution.disableAuthz()
+                    
+                    def userAccount = ec.entity.find("moqui.security.UserAccount")
                         .condition("userId", userId)
-                        .disableAuthz()
                         .one()
 
-                    if (!userRecord || userRecord.status != 'active') {
+                    if (!userAccount) {
+                        ec.artifactExecution.enableAuthz()
                         success = false
-                        message = "User not found or inactive."
+                        message = "User not found."
                         errorCode = "USER_NOT_FOUND"
                         return
                     }
+
+                    def novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        .condition("userId", userId)
+                        .one()
+
+                    if (novelAnimeUser &amp;&amp; novelAnimeUser.status != 'active') {
+                        ec.artifactExecution.enableAuthz()
+                        success = false
+                        message = "User account is not active."
+                        errorCode = "USER_INACTIVE"
+                        return
+                    }
+
+                    ec.artifactExecution.enableAuthz()
 
                     // Generate new tokens
                     def accessExpiryTime = Instant.now().plusSeconds(3600) // 1 hour
@@ -674,10 +979,10 @@
                         typ: "JWT"
                     ]).toString()
 
-                    // Create Access Token payload
+                    // Create Access Token payload - use UserAccount.emailAddress
                     def accessPayloadNew = new JsonBuilder([
                         sub: userId,
-                        email: userRecord.email,
+                        email: userAccount.emailAddress,
                         iat: Instant.now().epochSecond,
                         exp: accessExpiryTime.epochSecond,
                         type: "access"
@@ -1055,9 +1360,9 @@
 
     <!-- Create or Link GitHub User Service -->
     <service verb="createOrLink" noun="GitHubUser" authenticate="false">
-        <description>Check if GitHub user already exists, create new user with 500 credits if first login,
-        or link OAuth account to existing user if email matches.
-        Requirements: 2.1.2, 2.1.4</description>
+        <description>Check if GitHub user already exists, create UserAccount first, then link NovelAnimeUser.
+        Returns unified profile response same as regular login.
+        Requirements: 5.1, 5.2, 5.3</description>
         <in-parameters>
             <parameter name="githubUserId" required="true">
                 <description>GitHub user ID</description>
@@ -1101,57 +1406,99 @@
                 try {
                     def now = ec.user.nowTimestamp
                     isNewUser = false
+                    ec.artifactExecution.disableAuthz()
 
-                    // Step 1: Check if OAuth account already exists (Requirement 2.1.2 - existing user)
+                    // Step 1: Check if OAuth account already exists (Requirement 5.1)
                     def existingOAuth = ec.entity.find("novel.anime.user.UserOAuthAccount")
                         .condition("provider", "github")
                         .condition("providerUserId", githubUserId)
-                        .disableAuthz()
                         .one()
 
-                    def userRecord = null
+                    def userAccount = null
+                    def novelAnimeUser = null
 
                     if (existingOAuth) {
-                        // User has logged in with GitHub before - get existing user
-                        userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        // User has logged in with GitHub before - get existing UserAccount
+                        userAccount = ec.entity.find("moqui.security.UserAccount")
                             .condition("userId", existingOAuth.userId)
-                            .disableAuthz()
                             .one()
 
-                        if (!userRecord) {
+                        if (!userAccount) {
                             // Orphaned OAuth account - clean up and create new user
                             existingOAuth.delete()
                             existingOAuth = null
                         } else {
+                            // Get NovelAnimeUser
+                            novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                                .condition("userId", existingOAuth.userId)
+                                .one()
+
                             // Update OAuth account with latest token
                             existingOAuth.accessToken = githubAccessToken
                             existingOAuth.profileData = profileData
                             existingOAuth.lastUsedDate = now
                             existingOAuth.update()
 
-                            // Update user's last login and avatar
-                            userRecord.lastLoginDate = now
-                            if (avatarUrl &amp;&amp; !userRecord.avatarUrl) {
-                                userRecord.avatarUrl = avatarUrl
+                            // Update NovelAnimeUser's last login and avatar
+                            if (novelAnimeUser) {
+                                novelAnimeUser.lastLoginDate = now
+                                if (avatarUrl &amp;&amp; !novelAnimeUser.avatarUrl) {
+                                    novelAnimeUser.avatarUrl = avatarUrl
+                                }
+                                novelAnimeUser.update()
                             }
-                            userRecord.update()
 
-                            userId = userRecord.userId
+                            userId = userAccount.userId
                             ec.logger.info("Existing GitHub user logged in: ${email}")
                         }
                     }
 
-                    if (!userRecord) {
-                        // Step 2: Check if user exists with same email (for account linking)
-                        def existingUserByEmail = ec.entity.find("novel.anime.user.NovelAnimeUser")
-                            .condition("email", email.toLowerCase().trim())
-                            .disableAuthz()
+                    if (!userAccount) {
+                        // Step 2: Check if UserAccount exists with same email (Requirement 5.2)
+                        userAccount = ec.entity.find("moqui.security.UserAccount")
+                            .condition("emailAddress", email.toLowerCase().trim())
                             .one()
 
-                        if (existingUserByEmail) {
-                            // Link GitHub account to existing user
-                            userRecord = existingUserByEmail
-                            userId = userRecord.userId
+                        if (userAccount) {
+                            // Link GitHub account to existing UserAccount
+                            userId = userAccount.userId
+
+                            // Get or create NovelAnimeUser
+                            novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                                .condition("userId", userId)
+                                .one()
+
+                            if (!novelAnimeUser) {
+                                // Create NovelAnimeUser with default credits
+                                novelAnimeUser = ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                                    userId: userId,
+                                    avatarUrl: avatarUrl,
+                                    credits: 500,
+                                    status: 'active',
+                                    createdDate: now,
+                                    lastLoginDate: now
+                                ])
+                                novelAnimeUser.create()
+
+                                // Record initial credits transaction
+                                ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
+                                    transactionId: UUID.randomUUID().toString(),
+                                    userId: userId,
+                                    amount: 500,
+                                    type: 'initial',
+                                    operationType: 'github_link',
+                                    description: 'Initial credits on GitHub account link',
+                                    balanceAfter: 500,
+                                    timestamp: now
+                                ]).create()
+                            } else {
+                                // Update existing NovelAnimeUser
+                                novelAnimeUser.lastLoginDate = now
+                                if (avatarUrl &amp;&amp; !novelAnimeUser.avatarUrl) {
+                                    novelAnimeUser.avatarUrl = avatarUrl
+                                }
+                                novelAnimeUser.update()
+                            }
 
                             // Create OAuth account link
                             ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
@@ -1165,38 +1512,35 @@
                                 lastUsedDate: now
                             ]).create()
 
-                            // Update user's last login and avatar if not set
-                            userRecord.lastLoginDate = now
-                            if (avatarUrl &amp;&amp; !userRecord.avatarUrl) {
-                                userRecord.avatarUrl = avatarUrl
-                            }
-                            // Update authProvider if it was 'local'
-                            if (userRecord.authProvider == 'local') {
-                                userRecord.authProvider = 'github'
-                            }
-                            userRecord.update()
-
                             ec.logger.info("GitHub account linked to existing user: ${email}")
 
                         } else {
-                            // Step 3: Create new user with 500 initial credits (Requirement 2.1.4)
+                            // Step 3: Create new UserAccount first, then NovelAnimeUser (Requirement 5.2)
                             isNewUser = true
                             userId = UUID.randomUUID().toString()
                             def displayName = username ?: email.split('@')[0]
 
-                            // Create new user
-                            ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                            // Create UserAccount (Moqui's built-in user entity)
+                            userAccount = ec.entity.makeValue("moqui.security.UserAccount").setAll([
                                 userId: userId,
-                                email: email.toLowerCase().trim(),
-                                username: displayName,
-                                passwordHash: null, // No password for OAuth users
+                                username: "github_${githubUserId}",
+                                emailAddress: email.toLowerCase().trim(),
+                                userFullName: displayName,
+                                disabled: 'N',
+                                requirePasswordChange: 'N'
+                            ])
+                            userAccount.create()
+
+                            // Create NovelAnimeUser (business extension)
+                            novelAnimeUser = ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                                userId: userId,
                                 avatarUrl: avatarUrl,
                                 credits: 500,
                                 status: 'active',
-                                authProvider: 'github',
                                 createdDate: now,
                                 lastLoginDate: now
-                            ]).create()
+                            ])
+                            novelAnimeUser.create()
 
                             // Record initial credits transaction
                             ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
@@ -1222,15 +1566,11 @@
                                 lastUsedDate: now
                             ]).create()
 
-                            // Fetch the created user
-                            userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
-                                .condition("userId", userId)
-                                .disableAuthz()
-                                .one()
-
                             ec.logger.info("New GitHub user created: ${email} with 500 initial credits")
                         }
                     }
+
+                    ec.artifactExecution.enableAuthz()
 
                     // Step 4: Generate JWT tokens
                     def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
@@ -1246,7 +1586,7 @@
                     // Create Access Token payload
                     def accessPayload = new JsonBuilder([
                         sub: userId,
-                        email: userRecord.email,
+                        email: userAccount.emailAddress,
                         provider: "github",
                         iat: Instant.now().epochSecond,
                         exp: accessExpiryTime.epochSecond,
@@ -1283,22 +1623,24 @@
                     refreshToken = refreshTokenData + "." + refreshSignature
                     expiresIn = 3600L
 
-                    // Build user response object
+                    // Build unified user response (Requirement 5.3 - same as regular login)
                     user = [
-                        userId: userRecord.userId,
-                        email: userRecord.email,
-                        username: userRecord.username,
-                        credits: userRecord.credits,
-                        avatarUrl: userRecord.avatarUrl,
-                        authProvider: userRecord.authProvider,
-                        createdDate: userRecord.createdDate?.toString(),
-                        lastLoginDate: userRecord.lastLoginDate?.toString()
+                        userId: userId,
+                        username: userAccount.username,
+                        email: userAccount.emailAddress,
+                        fullName: userAccount.userFullName,
+                        credits: novelAnimeUser?.credits ?: 500,
+                        avatarUrl: novelAnimeUser?.avatarUrl,
+                        status: novelAnimeUser?.status ?: 'active',
+                        createdDate: novelAnimeUser?.createdDate?.toString(),
+                        lastLoginDate: novelAnimeUser?.lastLoginDate?.toString()
                     ]
 
                     success = true
                     message = isNewUser ? "Welcome to Novel Anime! Your account has been created with 500 credits." : "GitHub login successful."
 
                 } catch (Exception e) {
+                    ec.artifactExecution.enableAuthz()
                     ec.logger.error("GitHub user creation/linking failed", e)
                     success = false
                     message = "Failed to create or link GitHub account: " + e.message
@@ -1628,9 +1970,9 @@
 
     <!-- Create or Link Google User Service -->
     <service verb="createOrLink" noun="GoogleUser" authenticate="false">
-        <description>Check if Google user already exists, create new user with 500 credits if first login,
-        or link OAuth account to existing user if email matches.
-        Requirements: 2.2.2, 2.2.4</description>
+        <description>Check if Google user already exists, create UserAccount first, then link NovelAnimeUser.
+        Returns unified profile response same as regular login.
+        Requirements: 5.1, 5.2, 5.3</description>
         <in-parameters>
             <parameter name="googleUserId" required="true">
                 <description>Google user ID</description>
@@ -1680,57 +2022,99 @@
                 try {
                     def now = ec.user.nowTimestamp
                     isNewUser = false
+                    ec.artifactExecution.disableAuthz()
 
-                    // Step 1: Check if OAuth account already exists (Requirement 2.2.2 - existing user)
+                    // Step 1: Check if OAuth account already exists (Requirement 5.1)
                     def existingOAuth = ec.entity.find("novel.anime.user.UserOAuthAccount")
                         .condition("provider", "google")
                         .condition("providerUserId", googleUserId)
-                        .disableAuthz()
                         .one()
 
-                    def userRecord = null
+                    def userAccount = null
+                    def novelAnimeUser = null
 
                     if (existingOAuth) {
-                        // User has logged in with Google before - get existing user
-                        userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        // User has logged in with Google before - get existing UserAccount
+                        userAccount = ec.entity.find("moqui.security.UserAccount")
                             .condition("userId", existingOAuth.userId)
-                            .disableAuthz()
                             .one()
 
-                        if (!userRecord) {
+                        if (!userAccount) {
                             // Orphaned OAuth account - clean up and create new user
                             existingOAuth.delete()
                             existingOAuth = null
                         } else {
+                            // Get NovelAnimeUser
+                            novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                                .condition("userId", existingOAuth.userId)
+                                .one()
+
                             // Update OAuth account with latest token
                             existingOAuth.accessToken = googleAccessToken
                             existingOAuth.profileData = profileData
                             existingOAuth.lastUsedDate = now
                             existingOAuth.update()
 
-                            // Update user's last login and avatar
-                            userRecord.lastLoginDate = now
-                            if (avatarUrl && !userRecord.avatarUrl) {
-                                userRecord.avatarUrl = avatarUrl
+                            // Update NovelAnimeUser's last login and avatar
+                            if (novelAnimeUser) {
+                                novelAnimeUser.lastLoginDate = now
+                                if (avatarUrl &amp;&amp; !novelAnimeUser.avatarUrl) {
+                                    novelAnimeUser.avatarUrl = avatarUrl
+                                }
+                                novelAnimeUser.update()
                             }
-                            userRecord.update()
 
-                            userId = userRecord.userId
+                            userId = userAccount.userId
                             ec.logger.info("Existing Google user logged in: ${email}")
                         }
                     }
 
-                    if (!userRecord) {
-                        // Step 2: Check if user exists with same email (for account linking)
-                        def existingUserByEmail = ec.entity.find("novel.anime.user.NovelAnimeUser")
-                            .condition("email", email.toLowerCase().trim())
-                            .disableAuthz()
+                    if (!userAccount) {
+                        // Step 2: Check if UserAccount exists with same email (Requirement 5.2)
+                        userAccount = ec.entity.find("moqui.security.UserAccount")
+                            .condition("emailAddress", email.toLowerCase().trim())
                             .one()
 
-                        if (existingUserByEmail) {
-                            // Link Google account to existing user
-                            userRecord = existingUserByEmail
-                            userId = userRecord.userId
+                        if (userAccount) {
+                            // Link Google account to existing UserAccount
+                            userId = userAccount.userId
+
+                            // Get or create NovelAnimeUser
+                            novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                                .condition("userId", userId)
+                                .one()
+
+                            if (!novelAnimeUser) {
+                                // Create NovelAnimeUser with default credits
+                                novelAnimeUser = ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                                    userId: userId,
+                                    avatarUrl: avatarUrl,
+                                    credits: 500,
+                                    status: 'active',
+                                    createdDate: now,
+                                    lastLoginDate: now
+                                ])
+                                novelAnimeUser.create()
+
+                                // Record initial credits transaction
+                                ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
+                                    transactionId: UUID.randomUUID().toString(),
+                                    userId: userId,
+                                    amount: 500,
+                                    type: 'initial',
+                                    operationType: 'google_link',
+                                    description: 'Initial credits on Google account link',
+                                    balanceAfter: 500,
+                                    timestamp: now
+                                ]).create()
+                            } else {
+                                // Update existing NovelAnimeUser
+                                novelAnimeUser.lastLoginDate = now
+                                if (avatarUrl &amp;&amp; !novelAnimeUser.avatarUrl) {
+                                    novelAnimeUser.avatarUrl = avatarUrl
+                                }
+                                novelAnimeUser.update()
+                            }
 
                             // Create OAuth account link
                             ec.entity.makeValue("novel.anime.user.UserOAuthAccount").setAll([
@@ -1744,38 +2128,35 @@
                                 lastUsedDate: now
                             ]).create()
 
-                            // Update user's last login and avatar if not set
-                            userRecord.lastLoginDate = now
-                            if (avatarUrl && !userRecord.avatarUrl) {
-                                userRecord.avatarUrl = avatarUrl
-                            }
-                            // Update authProvider if it was 'local'
-                            if (userRecord.authProvider == 'local') {
-                                userRecord.authProvider = 'google'
-                            }
-                            userRecord.update()
-
                             ec.logger.info("Google account linked to existing user: ${email}")
 
                         } else {
-                            // Step 3: Create new user with 500 initial credits (Requirement 2.2.4)
+                            // Step 3: Create new UserAccount first, then NovelAnimeUser (Requirement 5.2)
                             isNewUser = true
                             userId = UUID.randomUUID().toString()
-                            def displayName = username ?: (givenName && familyName ? "${givenName} ${familyName}" : givenName ?: email.split('@')[0])
+                            def displayName = username ?: (givenName &amp;&amp; familyName ? "${givenName} ${familyName}" : givenName ?: email.split('@')[0])
 
-                            // Create new user
-                            ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                            // Create UserAccount (Moqui's built-in user entity)
+                            userAccount = ec.entity.makeValue("moqui.security.UserAccount").setAll([
                                 userId: userId,
-                                email: email.toLowerCase().trim(),
-                                username: displayName,
-                                passwordHash: null, // No password for OAuth users
+                                username: "google_${googleUserId}",
+                                emailAddress: email.toLowerCase().trim(),
+                                userFullName: displayName,
+                                disabled: 'N',
+                                requirePasswordChange: 'N'
+                            ])
+                            userAccount.create()
+
+                            // Create NovelAnimeUser (business extension)
+                            novelAnimeUser = ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                                userId: userId,
                                 avatarUrl: avatarUrl,
                                 credits: 500,
                                 status: 'active',
-                                authProvider: 'google',
                                 createdDate: now,
                                 lastLoginDate: now
-                            ]).create()
+                            ])
+                            novelAnimeUser.create()
 
                             // Record initial credits transaction
                             ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
@@ -1801,15 +2182,11 @@
                                 lastUsedDate: now
                             ]).create()
 
-                            // Fetch the created user
-                            userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
-                                .condition("userId", userId)
-                                .disableAuthz()
-                                .one()
-
                             ec.logger.info("New Google user created: ${email} with 500 initial credits")
                         }
                     }
+
+                    ec.artifactExecution.enableAuthz()
 
                     // Step 4: Generate JWT tokens
                     def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
@@ -1825,7 +2202,7 @@
                     // Create Access Token payload
                     def accessPayload = new JsonBuilder([
                         sub: userId,
-                        email: userRecord.email,
+                        email: userAccount.emailAddress,
                         provider: "google",
                         iat: Instant.now().epochSecond,
                         exp: accessExpiryTime.epochSecond,
@@ -1862,22 +2239,24 @@
                     refreshToken = refreshTokenData + "." + refreshSignature
                     expiresIn = 3600L
 
-                    // Build user response object
+                    // Build unified user response (Requirement 5.3 - same as regular login)
                     user = [
-                        userId: userRecord.userId,
-                        email: userRecord.email,
-                        username: userRecord.username,
-                        credits: userRecord.credits,
-                        avatarUrl: userRecord.avatarUrl,
-                        authProvider: userRecord.authProvider,
-                        createdDate: userRecord.createdDate?.toString(),
-                        lastLoginDate: userRecord.lastLoginDate?.toString()
+                        userId: userId,
+                        username: userAccount.username,
+                        email: userAccount.emailAddress,
+                        fullName: userAccount.userFullName,
+                        credits: novelAnimeUser?.credits ?: 500,
+                        avatarUrl: novelAnimeUser?.avatarUrl,
+                        status: novelAnimeUser?.status ?: 'active',
+                        createdDate: novelAnimeUser?.createdDate?.toString(),
+                        lastLoginDate: novelAnimeUser?.lastLoginDate?.toString()
                     ]
 
                     success = true
                     message = isNewUser ? "Welcome to Novel Anime! Your account has been created with 500 credits." : "Google login successful."
 
                 } catch (Exception e) {
+                    ec.artifactExecution.enableAuthz()
                     ec.logger.error("Google user creation/linking failed", e)
                     success = false
                     message = "Failed to create or link Google account: " + e.message
@@ -2379,9 +2758,9 @@
 
     <!-- Create or Link WeChat User Service -->
     <service verb="createOrLink" noun="WeChatUser" authenticate="false">
-        <description>Check if WeChat user already exists, create new user with 500 credits if first login,
-        or link OAuth account to existing user if email matches.
-        Requirements: 2.3.2, 2.3.4</description>
+        <description>Check if WeChat user already exists, create UserAccount first, then link NovelAnimeUser.
+        Returns unified profile response same as regular login.
+        Requirements: 5.1, 5.2, 5.3</description>
         <in-parameters>
             <parameter name="wechatUserId" required="true">
                 <description>WeChat user ID (unionid or openid)</description>
@@ -2440,51 +2819,58 @@
                 try {
                     def now = ec.user.nowTimestamp
                     isNewUser = false
+                    ec.artifactExecution.disableAuthz()
 
-                    // Step 1: Check if OAuth account already exists (Requirement 2.3.2 - existing user)
+                    // Step 1: Check if OAuth account already exists (Requirement 5.1)
                     def existingOAuth = ec.entity.find("novel.anime.user.UserOAuthAccount")
                         .condition("provider", "wechat")
                         .condition("providerUserId", wechatUserId)
-                        .disableAuthz()
                         .one()
 
-                    def userRecord = null
+                    def userAccount = null
+                    def novelAnimeUser = null
 
                     if (existingOAuth) {
-                        // User has logged in with WeChat before - get existing user
-                        userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        // User has logged in with WeChat before - get existing UserAccount
+                        userAccount = ec.entity.find("moqui.security.UserAccount")
                             .condition("userId", existingOAuth.userId)
-                            .disableAuthz()
                             .one()
 
-                        if (!userRecord) {
+                        if (!userAccount) {
                             // Orphaned OAuth account - clean up and create new user
                             existingOAuth.delete()
                             existingOAuth = null
                         } else {
+                            // Get NovelAnimeUser
+                            novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                                .condition("userId", existingOAuth.userId)
+                                .one()
+
                             // Update OAuth account with latest token
                             existingOAuth.accessToken = wechatAccessToken
                             existingOAuth.profileData = profileData
                             existingOAuth.lastUsedDate = now
                             existingOAuth.update()
 
-                            // Update user's last login and avatar
-                            userRecord.lastLoginDate = now
-                            if (avatarUrl && !userRecord.avatarUrl) {
-                                userRecord.avatarUrl = avatarUrl
+                            // Update NovelAnimeUser's last login and avatar
+                            if (novelAnimeUser) {
+                                novelAnimeUser.lastLoginDate = now
+                                if (avatarUrl &amp;&amp; !novelAnimeUser.avatarUrl) {
+                                    novelAnimeUser.avatarUrl = avatarUrl
+                                }
+                                novelAnimeUser.update()
                             }
-                            userRecord.update()
 
-                            userId = userRecord.userId
+                            userId = userAccount.userId
                             ec.logger.info("Existing WeChat user logged in: ${nickname} (${openid})")
                         }
                     }
 
-                    if (!userRecord) {
+                    if (!userAccount) {
                         // Step 2: WeChat doesn't provide email, so we create a new user directly
                         // (No email linking possible with WeChat)
                         
-                        // Step 3: Create new user with 500 initial credits (Requirement 2.3.4)
+                        // Step 3: Create new UserAccount first, then NovelAnimeUser (Requirement 5.2)
                         isNewUser = true
                         userId = UUID.randomUUID().toString()
                         def displayName = nickname ?: "WeChat User"
@@ -2492,19 +2878,27 @@
                         // Generate a placeholder email using openid
                         def placeholderEmail = "wechat_${openid}@novelanime.local"
 
-                        // Create new user
-                        ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                        // Create UserAccount (Moqui's built-in user entity)
+                        userAccount = ec.entity.makeValue("moqui.security.UserAccount").setAll([
                             userId: userId,
-                            email: placeholderEmail,
-                            username: displayName,
-                            passwordHash: null, // No password for OAuth users
+                            username: "wechat_${openid}",
+                            emailAddress: placeholderEmail,
+                            userFullName: displayName,
+                            disabled: 'N',
+                            requirePasswordChange: 'N'
+                        ])
+                        userAccount.create()
+
+                        // Create NovelAnimeUser (business extension)
+                        novelAnimeUser = ec.entity.makeValue("novel.anime.user.NovelAnimeUser").setAll([
+                            userId: userId,
                             avatarUrl: avatarUrl,
                             credits: 500,
                             status: 'active',
-                            authProvider: 'wechat',
                             createdDate: now,
                             lastLoginDate: now
-                        ]).create()
+                        ])
+                        novelAnimeUser.create()
 
                         // Record initial credits transaction
                         ec.entity.makeValue("novel.anime.user.CreditTransaction").setAll([
@@ -2530,14 +2924,10 @@
                             lastUsedDate: now
                         ]).create()
 
-                        // Fetch the created user
-                        userRecord = ec.entity.find("novel.anime.user.NovelAnimeUser")
-                            .condition("userId", userId)
-                            .disableAuthz()
-                            .one()
-
                         ec.logger.info("New WeChat user created: ${nickname} (${openid}) with 500 initial credits")
                     }
+
+                    ec.artifactExecution.enableAuthz()
 
                     // Step 4: Generate JWT tokens
                     def jwtSecret = "MoquiJWTSecretKey123456789012345678901234567890"
@@ -2553,7 +2943,7 @@
                     // Create Access Token payload
                     def accessPayload = new JsonBuilder([
                         sub: userId,
-                        email: userRecord.email,
+                        email: userAccount.emailAddress,
                         provider: "wechat",
                         iat: Instant.now().epochSecond,
                         exp: accessExpiryTime.epochSecond,
@@ -2590,26 +2980,426 @@
                     refreshToken = refreshTokenData + "." + refreshSignature
                     expiresIn = 3600L
 
-                    // Build user response object
+                    // Build unified user response (Requirement 5.3 - same as regular login)
                     user = [
-                        userId: userRecord.userId,
-                        email: userRecord.email,
-                        username: userRecord.username,
-                        credits: userRecord.credits,
-                        avatarUrl: userRecord.avatarUrl,
-                        authProvider: userRecord.authProvider,
-                        createdDate: userRecord.createdDate?.toString(),
-                        lastLoginDate: userRecord.lastLoginDate?.toString()
+                        userId: userId,
+                        username: userAccount.username,
+                        email: userAccount.emailAddress,
+                        fullName: userAccount.userFullName,
+                        credits: novelAnimeUser?.credits ?: 500,
+                        avatarUrl: novelAnimeUser?.avatarUrl,
+                        status: novelAnimeUser?.status ?: 'active',
+                        createdDate: novelAnimeUser?.createdDate?.toString(),
+                        lastLoginDate: novelAnimeUser?.lastLoginDate?.toString()
                     ]
 
                     success = true
                     message = isNewUser ? "Welcome to Novel Anime! Your account has been created with 500 credits." : "WeChat login successful."
 
                 } catch (Exception e) {
+                    ec.artifactExecution.enableAuthz()
                     ec.logger.error("WeChat user creation/linking failed", e)
                     success = false
                     message = "Failed to create or link WeChat account: " + e.message
                     errorCode = "USER_CREATION_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- System Status Service -->
+    <service verb="get" noun="SystemStatus" authenticate="anonymous-all">
+        <description>Get system status for frontend health check</description>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="status" type="String"/>
+            <parameter name="version" type="String"/>
+            <parameter name="timestamp" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                status = "online"
+                version = "1.0.0"
+                timestamp = new Date().format('yyyy-MM-dd HH:mm:ss')
+                
+                ec.logger.info("System status check: online")
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Update User Profile Service -->
+    <service verb="update" noun="UserProfile" authenticate="false">
+        <description>Update user profile information.
+        Updates UserAccount.userFullName if fullName provided.
+        Updates NovelAnimeUser.avatarUrl if avatarUrl provided.
+        Returns updated combined user profile.
+        Requirements: 6.1, 6.2, 6.3, 6.4</description>
+        <in-parameters>
+            <parameter name="userId">
+                <description>User ID (optional - will be extracted from JWT token if not provided)</description>
+            </parameter>
+            <parameter name="fullName">
+                <description>New display name for the user</description>
+            </parameter>
+            <parameter name="avatarUrl">
+                <description>New avatar URL for the user</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.util.Base64
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+
+                def targetUserId = userId
+
+                // If no userId provided, extract from JWT token
+                if (!targetUserId && ec.web?.request) {
+                    def authHeader = ec.web.request.getHeader("Authorization")
+                    if (authHeader && authHeader.startsWith("Bearer ")) {
+                        def jwtToken = authHeader.substring(7)
+                        try {
+                            def parts = jwtToken.split('\\.')
+                            if (parts.length == 3) {
+                                def payloadJson = new String(Base64.urlDecoder.decode(parts[1]), StandardCharsets.UTF_8)
+                                def payload = new JsonSlurper().parseText(payloadJson)
+                                targetUserId = payload.sub
+                            }
+                        } catch (Exception e) {
+                            ec.logger.warn("Failed to extract userId from token", e)
+                        }
+                    }
+                }
+
+                if (!targetUserId) {
+                    success = false
+                    message = "User ID not provided and could not be extracted from token."
+                    errorCode = "NO_USER_ID"
+                    return
+                }
+
+                // Check if at least one field to update
+                if (!fullName && !avatarUrl) {
+                    success = false
+                    message = "No fields to update. Provide fullName or avatarUrl."
+                    errorCode = "NO_UPDATE_FIELDS"
+                    return
+                }
+
+                try {
+                    ec.artifactExecution.disableAuthz()
+
+                    // Get UserAccount
+                    def userAccount = ec.entity.find("moqui.security.UserAccount")
+                        .condition("userId", targetUserId)
+                        .one()
+
+                    if (!userAccount) {
+                        ec.artifactExecution.enableAuthz()
+                        success = false
+                        message = "User not found."
+                        errorCode = "USER_NOT_FOUND"
+                        return
+                    }
+
+                    // Get NovelAnimeUser
+                    def novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        .condition("userId", targetUserId)
+                        .one()
+
+                    // Requirement 6.1: Update UserAccount.userFullName if fullName provided
+                    if (fullName) {
+                        userAccount.userFullName = fullName.trim()
+                        userAccount.update()
+                        ec.logger.info("Updated userFullName for userId: ${targetUserId}")
+                    }
+
+                    // Requirement 6.2: Update NovelAnimeUser.avatarUrl if avatarUrl provided
+                    if (avatarUrl && novelAnimeUser) {
+                        novelAnimeUser.avatarUrl = avatarUrl.trim()
+                        novelAnimeUser.update()
+                        ec.logger.info("Updated avatarUrl for userId: ${targetUserId}")
+                    }
+
+                    ec.artifactExecution.enableAuthz()
+
+                    // Requirement 6.3: Return updated combined user profile
+                    user = [
+                        userId: targetUserId,
+                        username: userAccount.username,
+                        email: userAccount.emailAddress,
+                        fullName: userAccount.userFullName,
+                        credits: novelAnimeUser?.credits ?: 500,
+                        avatarUrl: novelAnimeUser?.avatarUrl,
+                        status: novelAnimeUser?.status ?: 'active',
+                        createdDate: novelAnimeUser?.createdDate?.toString(),
+                        lastLoginDate: novelAnimeUser?.lastLoginDate?.toString()
+                    ]
+
+                    success = true
+                    message = "Profile updated successfully."
+
+                    ec.logger.info("Profile updated for userId: ${targetUserId}")
+
+                } catch (Exception e) {
+                    ec.artifactExecution.enableAuthz()
+                    // Requirement 6.4: Return error without modifying data
+                    ec.logger.error("Failed to update profile for userId: ${targetUserId}", e)
+                    success = false
+                    message = "Failed to update profile: " + e.message
+                    errorCode = "UPDATE_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Change Password Service -->
+    <service verb="change" noun="Password" authenticate="false">
+        <description>Change user password securely.
+        Verifies current password first, then updates with new password.
+        Requirements: 7.1, 7.2, 7.3, 7.4</description>
+        <in-parameters>
+            <parameter name="userId">
+                <description>User ID (optional - will be extracted from JWT token if not provided)</description>
+            </parameter>
+            <parameter name="currentPassword" required="true">
+                <description>Current password for verification</description>
+            </parameter>
+            <parameter name="newPassword" required="true">
+                <description>New password (minimum 8 characters)</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.util.Base64
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+
+                def targetUserId = userId
+
+                // If no userId provided, extract from JWT token
+                if (!targetUserId && ec.web?.request) {
+                    def authHeader = ec.web.request.getHeader("Authorization")
+                    if (authHeader && authHeader.startsWith("Bearer ")) {
+                        def jwtToken = authHeader.substring(7)
+                        try {
+                            def parts = jwtToken.split('\\.')
+                            if (parts.length == 3) {
+                                def payloadJson = new String(Base64.urlDecoder.decode(parts[1]), StandardCharsets.UTF_8)
+                                def payload = new JsonSlurper().parseText(payloadJson)
+                                targetUserId = payload.sub
+                            }
+                        } catch (Exception e) {
+                            ec.logger.warn("Failed to extract userId from token", e)
+                        }
+                    }
+                }
+
+                if (!targetUserId) {
+                    success = false
+                    message = "User ID not provided and could not be extracted from token."
+                    errorCode = "NO_USER_ID"
+                    return
+                }
+
+                // Validate new password length
+                if (!newPassword || newPassword.length() < 8) {
+                    success = false
+                    message = "New password must be at least 8 characters long."
+                    errorCode = "PASSWORD_TOO_SHORT"
+                    return
+                }
+
+                try {
+                    ec.artifactExecution.disableAuthz()
+
+                    // Get UserAccount
+                    def userAccount = ec.entity.find("moqui.security.UserAccount")
+                        .condition("userId", targetUserId)
+                        .one()
+
+                    if (!userAccount) {
+                        ec.artifactExecution.enableAuthz()
+                        success = false
+                        message = "User not found."
+                        errorCode = "USER_NOT_FOUND"
+                        return
+                    }
+
+                    // Requirement 7.1, 7.2: Verify current password first
+                    def currentPasswordHash = userAccount.currentPassword
+                    def passwordValid = false
+                    
+                    try {
+                        // Use Moqui's password verification
+                        passwordValid = org.moqui.impl.context.UserFacadeImpl.checkPassword(currentPassword, currentPasswordHash)
+                    } catch (Exception e) {
+                        ec.logger.warn("Password verification method not available, trying alternative", e)
+                        // Fallback: try direct hash comparison
+                        def inputHash = org.moqui.impl.context.UserFacadeImpl.getPasswordHash(currentPassword)
+                        passwordValid = (inputHash == currentPasswordHash)
+                    }
+
+                    if (!passwordValid) {
+                        ec.artifactExecution.enableAuthz()
+                        success = false
+                        message = "Current password is incorrect."
+                        errorCode = "INVALID_CURRENT_PASSWORD"
+                        ec.logger.warn("Password change failed - incorrect current password for userId: ${targetUserId}")
+                        return
+                    }
+
+                    // Requirement 7.3: Hash and update new password using Moqui's password hashing
+                    def newPasswordHash = org.moqui.impl.context.UserFacadeImpl.getPasswordHash(newPassword)
+                    userAccount.currentPassword = newPasswordHash
+                    userAccount.passwordSetDate = ec.user.nowTimestamp
+                    userAccount.update()
+
+                    ec.artifactExecution.enableAuthz()
+
+                    // Requirement 7.4: Return success confirmation
+                    success = true
+                    message = "Password changed successfully."
+
+                    ec.logger.info("Password changed for userId: ${targetUserId}")
+
+                } catch (Exception e) {
+                    ec.artifactExecution.enableAuthz()
+                    ec.logger.error("Failed to change password for userId: ${targetUserId}", e)
+                    success = false
+                    message = "Failed to change password: " + e.message
+                    errorCode = "PASSWORD_CHANGE_ERROR"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Upload Avatar Service -->
+    <service verb="upload" noun="Avatar" authenticate="false">
+        <description>Upload user avatar image.
+        Accepts base64 encoded image data, saves to dbresource, and updates NovelAnimeUser.avatarUrl.
+        Returns the URL of the uploaded avatar.</description>
+        <in-parameters>
+            <parameter name="userId">
+                <description>User ID (optional - will be extracted from JWT token if not provided)</description>
+            </parameter>
+            <parameter name="imageData" required="true">
+                <description>Base64 encoded image data (with or without data URI prefix)</description>
+            </parameter>
+            <parameter name="filename">
+                <description>Original filename (optional, used for extension detection)</description>
+            </parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="avatarUrl"/>
+            <parameter name="message"/>
+            <parameter name="errorCode"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.util.Base64
+                import java.nio.charset.StandardCharsets
+                import groovy.json.JsonSlurper
+
+                def targetUserId = userId
+
+                // If no userId provided, extract from JWT token
+                if (!targetUserId && ec.web?.request) {
+                    def authHeader = ec.web.request.getHeader("Authorization")
+                    if (authHeader && authHeader.startsWith("Bearer ")) {
+                        def jwtToken = authHeader.substring(7)
+                        try {
+                            def parts = jwtToken.split('\\.')
+                            if (parts.length == 3) {
+                                def payloadJson = new String(Base64.urlDecoder.decode(parts[1]), StandardCharsets.UTF_8)
+                                def payload = new JsonSlurper().parseText(payloadJson)
+                                targetUserId = payload.sub
+                            }
+                        } catch (Exception e) {
+                            ec.logger.warn("Failed to extract userId from token", e)
+                        }
+                    }
+                }
+
+                if (!targetUserId) {
+                    success = false
+                    message = "User ID not provided and could not be extracted from token."
+                    errorCode = "NO_USER_ID"
+                    return
+                }
+
+                try {
+                    // Validate and normalize base64 image data
+                    def base64Data = imageData
+                    def mimeType = "image/png"
+
+                    // Handle data URI format: data:image/png;base64,xxxxx
+                    if (imageData.startsWith("data:")) {
+                        def dataUriParts = imageData.split(",")
+                        if (dataUriParts.length == 2) {
+                            def header = dataUriParts[0]
+                            base64Data = dataUriParts[1]
+                            
+                            // Extract mime type
+                            def mimeMatch = header =~ /data:([^;]+)/
+                            if (mimeMatch) {
+                                mimeType = mimeMatch[0][1]
+                            }
+                        }
+                    }
+
+                    // Decode base64 to validate and check size
+                    def imageBytes = Base64.decoder.decode(base64Data)
+
+                    // Validate image size (max 2MB)
+                    if (imageBytes.length > 2 * 1024 * 1024) {
+                        success = false
+                        message = "Image size exceeds 2MB limit."
+                        errorCode = "IMAGE_TOO_LARGE"
+                        return
+                    }
+
+                    // Store the complete data URI directly in the database
+                    // This is simpler and more reliable than file storage
+                    avatarUrl = "data:${mimeType};base64,${base64Data}"
+
+                    // Update NovelAnimeUser.avatarUrl with the data URI
+                    ec.artifactExecution.disableAuthz()
+                    
+                    def novelAnimeUser = ec.entity.find("novel.anime.user.NovelAnimeUser")
+                        .condition("userId", targetUserId)
+                        .one()
+
+                    if (novelAnimeUser) {
+                        novelAnimeUser.avatarUrl = avatarUrl
+                        novelAnimeUser.update()
+                    }
+
+                    ec.artifactExecution.enableAuthz()
+
+                    success = true
+                    message = "Avatar uploaded successfully."
+
+                    ec.logger.info("Avatar uploaded for userId: ${targetUserId}, size: ${imageBytes.length} bytes")
+
+                } catch (Exception e) {
+                    ec.logger.error("Failed to upload avatar for userId: ${targetUserId}", e)
+                    success = false
+                    message = "Failed to upload avatar: " + e.message
+                    errorCode = "UPLOAD_ERROR"
                 }
             ]]></script>
         </actions>

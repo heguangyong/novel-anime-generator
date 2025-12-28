@@ -1,19 +1,38 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <entities xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/entity-definition-3.xsd">
     
+    <!-- Project Management Entities -->
+    <entity entity-name="Project" package="novel.anime" authorize-skip="create,update,delete">
+        <field name="projectId" type="id" is-pk="true"/>
+        <field name="name" type="text-medium" not-null="true"/>
+        <field name="description" type="text-long"/>
+        <field name="userId" type="id" not-null="true"/>
+        <field name="status" type="text-short" default="'active'"/>
+        <field name="createdDate" type="date-time"/>
+        <field name="lastUpdated" type="date-time"/>
+        <relationship type="one" related="novel.anime.user.NovelAnimeUser"/>
+        <index name="PROJECT_USER_IDX">
+            <index-field name="userId"/>
+        </index>
+    </entity>
+
     <!-- Novel Structure Entities -->
-    <entity entity-name="Novel" package="novel.anime">
+    <entity entity-name="Novel" package="novel.anime" authorize-skip="create,update,delete">
         <field name="novelId" type="id" is-pk="true"/>
+        <field name="projectId" type="id"/>
         <field name="title" type="text-medium"/>
         <field name="author" type="text-medium"/>
         <field name="originalText" type="text-very-long"/>
         <field name="wordCount" type="number-integer"/>
         <field name="status" type="text-short"/>
+        <field name="sourceType" type="text-short"/> <!-- text, file -->
+        <field name="filename" type="text-medium"/>
         <field name="createdDate" type="date-time"/>
         <field name="lastUpdated" type="date-time"/>
+        <relationship type="one" related="novel.anime.Project"/>
     </entity>
 
-    <entity entity-name="Chapter" package="novel.anime">
+    <entity entity-name="Chapter" package="novel.anime" authorize-skip="create,update,delete">
         <field name="chapterId" type="id" is-pk="true"/>
         <field name="novelId" type="id"/>
         <field name="chapterNumber" type="number-integer"/>
@@ -24,13 +43,18 @@
         <relationship type="one" related="novel.anime.Novel"/>
     </entity>
 
-    <entity entity-name="Scene" package="novel.anime">
+    <entity entity-name="Scene" package="novel.anime" authorize-skip="create,update,delete">
         <field name="sceneId" type="id" is-pk="true"/>
         <field name="chapterId" type="id"/>
         <field name="sceneNumber" type="number-integer"/>
         <field name="content" type="text-very-long"/>
         <field name="setting" type="text-medium"/>
         <field name="mood" type="text-short"/>
+        <field name="visualDescription" type="text-long"/>
+        <field name="timeOfDay" type="text-short"/>
+        <field name="weather" type="text-short"/>
+        <field name="analysisStatus" type="text-short"/>
+        <field name="isApproved" type="text-indicator"/>
         <relationship type="one" related="novel.anime.Chapter"/>
     </entity>
 
@@ -43,6 +67,9 @@
         <field name="description" type="text-long"/>
         <field name="appearance" type="text-long"/>
         <field name="personality" type="text-long"/>
+        <field name="firstMention" type="text-medium"/>
+        <field name="mentionCount" type="number-integer"/>
+        <field name="extractionConfidence" type="number-decimal"/>
         <field name="isLocked" type="text-indicator"/>
         <field name="createdDate" type="date-time"/>
         <relationship type="one" related="novel.anime.Novel"/>
@@ -159,12 +186,17 @@
     </entity>
 
     <!-- Workflow and Processing Entities -->
-    <entity entity-name="ProcessingPipeline" package="novel.anime">
+    <entity entity-name="ProcessingPipeline" package="novel.anime" authorize-skip="create,update,delete">
         <field name="pipelineId" type="id" is-pk="true"/>
         <field name="novelId" type="id"/>
         <field name="status" type="text-short"/>
         <field name="currentStage" type="text-short"/>
+        <field name="totalStages" type="number-integer" default="4"/>
+        <field name="completedStages" type="number-integer" default="0"/>
         <field name="configuration" type="text-very-long"/>
+        <field name="creditsReserved" type="number-integer"/>
+        <field name="creditsUsed" type="number-integer"/>
+        <field name="estimatedDuration" type="number-integer"/>
         <field name="startedDate" type="date-time"/>
         <field name="completedDate" type="date-time"/>
         <relationship type="one" related="novel.anime.Novel"/>
@@ -182,21 +214,16 @@
         <relationship type="one" related="novel.anime.ProcessingPipeline"/>
     </entity>
 
-    <!-- User Authentication Entities -->
+    <!-- User Business Extension Entity (linked to Moqui UserAccount for authentication) -->
     <entity entity-name="NovelAnimeUser" package="novel.anime.user">
         <field name="userId" type="id" is-pk="true"/>
-        <field name="email" type="text-medium" not-null="true"/>
-        <field name="username" type="text-medium"/>
-        <field name="passwordHash" type="text-medium"/>
-        <field name="avatarUrl" type="text-medium"/>
+        <field name="email" type="text-medium"/>
+        <field name="avatarUrl" type="text-very-long"/>
         <field name="credits" type="number-integer" default="500"/>
         <field name="status" type="text-short" default="'active'"/>
-        <field name="authProvider" type="text-short" default="'local'"/>
         <field name="createdDate" type="date-time"/>
         <field name="lastLoginDate" type="date-time"/>
-        <index name="NAU_EMAIL_IDX" unique="true">
-            <index-field name="email"/>
-        </index>
+        <relationship type="one" related="moqui.security.UserAccount"/>
     </entity>
 
     <!-- OAuth Account Linking Entity -->

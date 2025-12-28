@@ -1,0 +1,338 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- Character Management Services -->
+    
+    <service verb="get" noun="Characters" authenticate="anonymous-all">
+        <description>Get character list with filtering and sorting</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+            <parameter name="role" type="String"/>
+            <parameter name="isLocked" type="String"/>
+            <parameter name="orderBy" type="String" default="mentionCount"/>
+            <parameter name="orderDirection" type="String" default="DESC"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="characters" type="List"/>
+            <parameter name="totalCount" type="Integer"/>
+        </out-parameters>
+        <actions>
+            <entity-find entity-name="novel.anime.Character" list="characterList">
+                <econdition field-name="novelId" from="novelId"/>
+                <econdition field-name="role" from="role" ignore-if-empty="true"/>
+                <econdition field-name="isLocked" from="isLocked" ignore-if-empty="true"/>
+                <order-by field-name="mentionCount DESC"/>
+            </entity-find>
+            
+            <set field="characters" from="characterList.collect { [
+                characterId: it.characterId,
+                name: it.name,
+                role: it.role,
+                description: it.description,
+                appearance: it.appearance,
+                personality: it.personality,
+                mentionCount: it.mentionCount,
+                extractionConfidence: it.extractionConfidence,
+                isLocked: it.isLocked,
+                createdDate: it.createdDate
+            ] }"/>
+            <set field="totalCount" from="characterList.size()"/>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Character" authenticate="anonymous-all">
+        <description>Get single character details</description>
+        <in-parameters>
+            <parameter name="characterId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="character" type="Map"/>
+            <parameter name="relationships" type="List"/>
+            <parameter name="appearances" type="List"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Character" value-field="characterValue">
+                <field-map field-name="characterId" from="characterId"/>
+            </entity-find-one>
+            
+            <if condition="characterValue">
+                <set field="character" from="[
+                    characterId: characterValue.characterId,
+                    novelId: characterValue.novelId,
+                    name: characterValue.name,
+                    role: characterValue.role,
+                    description: characterValue.description,
+                    appearance: characterValue.appearance,
+                    personality: characterValue.personality,
+                    firstMention: characterValue.firstMention,
+                    mentionCount: characterValue.mentionCount,
+                    extractionConfidence: characterValue.extractionConfidence,
+                    isLocked: characterValue.isLocked,
+                    createdDate: characterValue.createdDate
+                ]"/>
+                
+                <!-- Get character relationships -->
+                <entity-find entity-name="novel.anime.CharacterRelationship" list="relationshipList">
+                    <econditions combine="or">
+                        <econdition field-name="fromCharacterId" from="characterId"/>
+                        <econdition field-name="toCharacterId" from="characterId"/>
+                    </econditions>
+                </entity-find>
+                
+                <set field="relationships" from="relationshipList.collect { [
+                    relationshipId: it.relationshipId,
+                    fromCharacterId: it.fromCharacterId,
+                    toCharacterId: it.toCharacterId,
+                    relationshipType: it.relationshipType,
+                    description: it.description
+                ] }"/>
+                
+                <!-- Get character scene appearances -->
+                <entity-find entity-name="novel.anime.CharacterAppearance" list="appearanceList">
+                    <econdition field-name="characterId" from="characterId"/>
+                </entity-find>
+                
+                <set field="appearances" from="appearanceList.collect { [
+                    appearanceId: it.appearanceId,
+                    sceneId: it.sceneId,
+                    description: it.description
+                ] }"/>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Character" authenticate="anonymous-all">
+        <description>Update character information</description>
+        <in-parameters>
+            <parameter name="characterId" type="String" required="true"/>
+            <parameter name="name" type="String"/>
+            <parameter name="role" type="String"/>
+            <parameter name="description" type="String"/>
+            <parameter name="appearance" type="String"/>
+            <parameter name="personality" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Character" value-field="characterValue">
+                <field-map field-name="characterId" from="characterId"/>
+            </entity-find-one>
+            
+            <if condition="!characterValue">
+                <return error="true" message="Character not found"/>
+            </if>
+            
+            <!-- Check if character is locked -->
+            <if condition="characterValue.isLocked == 'Y'">
+                <return error="true" message="Character is locked and cannot be modified"/>
+            </if>
+            
+            <!-- Update character fields -->
+            <if condition="name"><set field="characterValue.name" from="name"/></if>
+            <if condition="role"><set field="characterValue.role" from="role"/></if>
+            <if condition="description"><set field="characterValue.description" from="description"/></if>
+            <if condition="appearance"><set field="characterValue.appearance" from="appearance"/></if>
+            <if condition="personality"><set field="characterValue.personality" from="personality"/></if>
+            
+            <entity-update value-field="characterValue"/>
+            
+            <set field="success" value="true"/>
+            <set field="message" value="Character updated successfully"/>
+        </actions>
+    </service>
+
+    <service verb="lock" noun="Character" authenticate="anonymous-all">
+        <description>Lock character to prevent AI modifications</description>
+        <in-parameters>
+            <parameter name="characterId" type="String" required="true"/>
+            <parameter name="isLocked" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Character" value-field="characterValue">
+                <field-map field-name="characterId" from="characterId"/>
+            </entity-find-one>
+            
+            <if condition="!characterValue">
+                <return error="true" message="Character not found"/>
+            </if>
+            
+            <set field="characterValue.isLocked" from="isLocked"/>
+            <entity-update value-field="characterValue"/>
+            
+            <set field="success" value="true"/>
+            <set field="message" value="Character lock status updated"/>
+        </actions>
+    </service>
+
+    <service verb="merge" noun="Characters" authenticate="anonymous-all">
+        <description>Merge duplicate characters</description>
+        <in-parameters>
+            <parameter name="primaryCharacterId" type="String" required="true"/>
+            <parameter name="duplicateCharacterId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <!-- Get both characters -->
+            <entity-find-one entity-name="novel.anime.Character" value-field="primaryCharacter">
+                <field-map field-name="characterId" from="primaryCharacterId"/>
+            </entity-find-one>
+            <entity-find-one entity-name="novel.anime.Character" value-field="duplicateCharacter">
+                <field-map field-name="characterId" from="duplicateCharacterId"/>
+            </entity-find-one>
+            
+            <if condition="!primaryCharacter || !duplicateCharacter">
+                <return error="true" message="One or both characters not found"/>
+            </if>
+            
+            <!-- Check if either character is locked -->
+            <if condition="primaryCharacter.isLocked == 'Y' || duplicateCharacter.isLocked == 'Y'">
+                <return error="true" message="Cannot merge locked characters"/>
+            </if>
+            
+            <!-- Merge mention counts -->
+            <set field="primaryCharacter.mentionCount" from="(primaryCharacter.mentionCount ?: 0) + (duplicateCharacter.mentionCount ?: 0)"/>
+            
+            <!-- Update extraction confidence -->
+            <script>
+                def primaryConf = primaryCharacter.extractionConfidence ?: 0.0
+                def duplicateConf = duplicateCharacter.extractionConfidence ?: 0.0
+                primaryCharacter.extractionConfidence = Math.max(primaryConf, duplicateConf)
+            </script>
+            
+            <!-- Update primary character -->
+            <entity-update value-field="primaryCharacter"/>
+            
+            <!-- Update all relationships pointing to duplicate character -->
+            <entity-find entity-name="novel.anime.CharacterRelationship" list="relationshipList">
+                <econditions combine="or">
+                    <econdition field-name="fromCharacterId" from="duplicateCharacterId"/>
+                    <econdition field-name="toCharacterId" from="duplicateCharacterId"/>
+                </econditions>
+            </entity-find>
+            
+            <iterate list="relationshipList" entry="relationship">
+                <if condition="relationship.fromCharacterId == duplicateCharacterId">
+                    <set field="relationship.fromCharacterId" from="primaryCharacterId"/>
+                </if>
+                <if condition="relationship.toCharacterId == duplicateCharacterId">
+                    <set field="relationship.toCharacterId" from="primaryCharacterId"/>
+                </if>
+                <entity-update value-field="relationship"/>
+            </iterate>
+            
+            <!-- Update all appearances pointing to duplicate character -->
+            <entity-find entity-name="novel.anime.CharacterAppearance" list="appearanceList">
+                <econdition field-name="characterId" from="duplicateCharacterId"/>
+            </entity-find>
+            
+            <iterate list="appearanceList" entry="appearance">
+                <set field="appearance.characterId" from="primaryCharacterId"/>
+                <entity-update value-field="appearance"/>
+            </iterate>
+            
+            <!-- Delete duplicate character -->
+            <entity-delete value-field="duplicateCharacter"/>
+            
+            <set field="success" value="true"/>
+            <set field="message" value="Characters merged successfully"/>
+        </actions>
+    </service>
+
+    <service verb="create" noun="CharacterRelationship" authenticate="anonymous-all">
+        <description>Create relationship between characters</description>
+        <in-parameters>
+            <parameter name="fromCharacterId" type="String" required="true"/>
+            <parameter name="toCharacterId" type="String" required="true"/>
+            <parameter name="relationshipType" type="String" required="true"/>
+            <parameter name="description" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="relationshipId" type="String"/>
+        </out-parameters>
+        <actions>
+            <!-- Validate characters exist -->
+            <entity-find-one entity-name="novel.anime.Character" value-field="fromCharacter">
+                <field-map field-name="characterId" from="fromCharacterId"/>
+            </entity-find-one>
+            <entity-find-one entity-name="novel.anime.Character" value-field="toCharacter">
+                <field-map field-name="characterId" from="toCharacterId"/>
+            </entity-find-one>
+            
+            <if condition="!fromCharacter || !toCharacter">
+                <return error="true" message="One or both characters not found"/>
+            </if>
+            
+            <!-- Create relationship -->
+            <service-call name="create#novel.anime.CharacterRelationship" out-map="createResult">
+                <field-map field-name="fromCharacterId" from="fromCharacterId"/>
+                <field-map field-name="toCharacterId" from="toCharacterId"/>
+                <field-map field-name="relationshipType" from="relationshipType"/>
+                <field-map field-name="description" from="description"/>
+            </service-call>
+            
+            <set field="success" value="true"/>
+            <set field="relationshipId" from="createResult.relationshipId"/>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="Character" authenticate="anonymous-all">
+        <description>Delete character and all related data</description>
+        <in-parameters>
+            <parameter name="characterId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Character" value-field="characterValue">
+                <field-map field-name="characterId" from="characterId"/>
+            </entity-find-one>
+            
+            <if condition="!characterValue">
+                <return error="true" message="Character not found"/>
+            </if>
+            
+            <!-- Check if character is locked -->
+            <if condition="characterValue.isLocked == 'Y'">
+                <return error="true" message="Cannot delete locked character"/>
+            </if>
+            
+            <!-- Delete all relationships -->
+            <entity-find entity-name="novel.anime.CharacterRelationship" list="relationshipList">
+                <econditions combine="or">
+                    <econdition field-name="fromCharacterId" from="characterId"/>
+                    <econdition field-name="toCharacterId" from="characterId"/>
+                </econditions>
+            </entity-find>
+            <iterate list="relationshipList" entry="relationship">
+                <entity-delete value-field="relationship"/>
+            </iterate>
+            
+            <!-- Delete all appearances -->
+            <entity-find entity-name="novel.anime.CharacterAppearance" list="appearanceList">
+                <econdition field-name="characterId" from="characterId"/>
+            </entity-find>
+            <iterate list="appearanceList" entry="appearance">
+                <entity-delete value-field="appearance"/>
+            </iterate>
+            
+            <!-- Delete character -->
+            <entity-delete value-field="characterValue"/>
+            
+            <set field="success" value="true"/>
+            <set field="message" value="Character deleted successfully"/>
+        </actions>
+    </service>
+
+</services>

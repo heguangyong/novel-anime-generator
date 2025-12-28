@@ -3,18 +3,412 @@
 
     <!-- REST API Services for Novel Anime Generator -->
     
-    <service verb="get" noun="Novel" type="interface">
-        <description>Get novel by ID</description>
+    <!-- Project Management Services -->
+    <service verb="create" noun="Project" authenticate="false">
+        <description>Create a new project</description>
         <in-parameters>
-            <parameter name="novelId" type="String" required="true"/>
+            <parameter name="name" type="String" required="true"/>
+            <parameter name="description" type="String"/>
+            <parameter name="userId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="project" type="Map"/>
+            <parameter name="success" type="Boolean"/>
+        </out-parameters>
+        <actions>
+            <!-- Validate user exists, create default user if not found -->
+            <entity-find-one entity-name="novel.anime.user.NovelAnimeUser" value-field="userValue">
+                <field-map field-name="userId" from="userId"/>
+            </entity-find-one>
+            <if condition="!userValue">
+                <!-- Auto-create NovelAnimeUser for development (linked to UserAccount) -->
+                <log level="info" message="Creating NovelAnimeUser for userId: ${userId}"/>
+                <service-call name="create#novel.anime.user.NovelAnimeUser" out-map="createUserResult">
+                    <field-map field-name="userId" from="userId"/>
+                    <field-map field-name="credits" value="1000"/>
+                    <field-map field-name="status" value="active"/>
+                    <field-map field-name="createdDate" from="ec.user.nowTimestamp"/>
+                </service-call>
+                <entity-find-one entity-name="novel.anime.user.NovelAnimeUser" value-field="userValue">
+                    <field-map field-name="userId" from="userId"/>
+                </entity-find-one>
+            </if>
+            
+            <!-- Create project -->
+            <service-call name="create#novel.anime.Project" out-map="createResult">
+                <field-map field-name="name" from="name"/>
+                <field-map field-name="description" from="description"/>
+                <field-map field-name="userId" from="userId"/>
+                <field-map field-name="status" value="active"/>
+                <field-map field-name="createdDate" from="ec.user.nowTimestamp"/>
+                <field-map field-name="lastUpdated" from="ec.user.nowTimestamp"/>
+            </service-call>
+            
+            <entity-find-one entity-name="novel.anime.Project" value-field="projectValue">
+                <field-map field-name="projectId" from="createResult.projectId"/>
+            </entity-find-one>
+            
+            <set field="project" from="[
+                projectId: projectValue.projectId,
+                name: projectValue.name,
+                description: projectValue.description,
+                userId: projectValue.userId,
+                status: projectValue.status,
+                createdDate: projectValue.createdDate,
+                lastUpdated: projectValue.lastUpdated
+            ]"/>
+            <set field="success" value="true"/>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Project">
+        <description>Get project by ID</description>
+        <in-parameters>
+            <parameter name="projectId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="project" type="Map"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Project" value-field="projectValue"/>
+            <if condition="projectValue">
+                <!-- Get novels in this project -->
+                <entity-find entity-name="novel.anime.Novel" list="novelList">
+                    <econdition field-name="projectId" from="projectId"/>
+                    <order-by field-name="-createdDate"/>
+                </entity-find>
+                
+                <set field="project" from="[
+                    projectId: projectValue.projectId,
+                    name: projectValue.name,
+                    description: projectValue.description,
+                    userId: projectValue.userId,
+                    status: projectValue.status,
+                    createdDate: projectValue.createdDate,
+                    lastUpdated: projectValue.lastUpdated,
+                    novels: novelList.collect { [
+                        novelId: it.novelId,
+                        title: it.title,
+                        author: it.author,
+                        wordCount: it.wordCount,
+                        status: it.status,
+                        sourceType: it.sourceType,
+                        createdDate: it.createdDate
+                    ] }
+                ]"/>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Projects" authenticate="false">
+        <description>List projects for a user</description>
+        <in-parameters>
+            <parameter name="userId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="projects" type="List"/>
+        </out-parameters>
+        <actions>
+            <entity-find entity-name="novel.anime.Project" list="projectList">
+                <econdition field-name="userId" from="userId"/>
+                <order-by field-name="-createdDate"/>
+            </entity-find>
+            
+            <set field="projects" from="projectList.collect { [
+                projectId: it.projectId,
+                name: it.name,
+                description: it.description,
+                status: it.status,
+                createdDate: it.createdDate,
+                lastUpdated: it.lastUpdated
+            ] }"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Project">
+        <description>Update project metadata</description>
+        <in-parameters>
+            <parameter name="projectId" type="String" required="true"/>
+            <parameter name="name" type="String"/>
+            <parameter name="description" type="String"/>
+            <parameter name="status" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Project" value-field="projectValue"/>
+            <if condition="projectValue">
+                <if condition="name"><set field="projectValue.name" from="name"/></if>
+                <if condition="description"><set field="projectValue.description" from="description"/></if>
+                <if condition="status"><set field="projectValue.status" from="status"/></if>
+                <set field="projectValue.lastUpdated" from="ec.user.nowTimestamp"/>
+                <entity-update value-field="projectValue"/>
+                <set field="success" value="true"/>
+                <else>
+                    <set field="success" value="false"/>
+                </else>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="Project">
+        <description>Delete project and all related data</description>
+        <in-parameters>
+            <parameter name="projectId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+        </out-parameters>
+        <actions>
+            <!-- Delete all novels in this project -->
+            <entity-find entity-name="novel.anime.Novel" list="novelList">
+                <econdition field-name="projectId" from="projectId"/>
+            </entity-find>
+            <iterate list="novelList" entry="novel">
+                <service-call name="delete#Novel">
+                    <field-map field-name="novelId" from="novel.novelId"/>
+                </service-call>
+            </iterate>
+            
+            <!-- Delete the project -->
+            <entity-find-one entity-name="novel.anime.Project" value-field="projectValue"/>
+            <if condition="projectValue">
+                <entity-delete value-field="projectValue"/>
+                <set field="success" value="true"/>
+                <else>
+                    <set field="success" value="false"/>
+                </else>
+            </if>
+        </actions>
+    </service>
+
+    <!-- Novel Import Services -->
+    <service verb="create" noun="NovelFromText" authenticate="false">
+        <description>Import novel from text input</description>
+        <in-parameters>
+            <parameter name="projectId" type="String" required="true"/>
+            <parameter name="title" type="String" required="true"/>
+            <parameter name="author" type="String"/>
+            <parameter name="content" type="String" required="true"/>
         </in-parameters>
         <out-parameters>
             <parameter name="novel" type="Map"/>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="creditsUsed" type="Integer"/>
         </out-parameters>
+        <actions>
+            <!-- Validate project exists -->
+            <entity-find-one entity-name="novel.anime.Project" value-field="projectValue">
+                <field-map field-name="projectId" from="projectId"/>
+            </entity-find-one>
+            <if condition="!projectValue">
+                <return error="true" message="Project not found"/>
+            </if>
+            
+            <!-- Validate content length -->
+            <script><![CDATA[
+                // For Chinese text, count characters instead of words
+                def wordCount = content.length()
+                if (wordCount < 100) {
+                    ec.message.addError("Novel content must be at least 100 characters")
+                    return
+                }
+                // For display purposes, estimate word count (Chinese: ~2 chars per word)
+                context.wordCount = Math.max(100, Math.ceil(wordCount / 2.0))
+            ]]></script>
+            <if condition="ec.message.hasError()">
+                <return error="true"/>
+            </if>
+            
+            <!-- Calculate credit cost (1 credit per 1000 words) -->
+            <script><![CDATA[
+                context.creditsNeeded = Math.max(1, Math.ceil(wordCount / 1000.0))
+            ]]></script>
+            
+            <!-- Check user credits -->
+            <entity-find-one entity-name="novel.anime.user.NovelAnimeUser" value-field="userValue">
+                <field-map field-name="userId" from="projectValue.userId"/>
+            </entity-find-one>
+            <!-- Auto-create NovelAnimeUser if not found (linked to UserAccount) -->
+            <if condition="!userValue">
+                <log level="info" message="Auto-creating NovelAnimeUser for novel import: ${projectValue.userId}"/>
+                <service-call name="create#novel.anime.user.NovelAnimeUser">
+                    <field-map field-name="userId" from="projectValue.userId"/>
+                    <field-map field-name="credits" value="1000"/>
+                    <field-map field-name="status" value="active"/>
+                    <field-map field-name="createdDate" from="ec.user.nowTimestamp"/>
+                </service-call>
+                <entity-find-one entity-name="novel.anime.user.NovelAnimeUser" value-field="userValue">
+                    <field-map field-name="userId" from="projectValue.userId"/>
+                </entity-find-one>
+            </if>
+            <if condition="userValue.credits &lt; creditsNeeded">
+                <return error="true" message="Insufficient credits. Need ${creditsNeeded}, have ${userValue.credits}"/>
+            </if>
+            
+            <!-- Create novel -->
+            <service-call name="create#novel.anime.Novel" out-map="createResult">
+                <field-map field-name="projectId" from="projectId"/>
+                <field-map field-name="title" from="title"/>
+                <field-map field-name="author" from="author"/>
+                <field-map field-name="originalText" from="content"/>
+                <field-map field-name="wordCount" from="wordCount"/>
+                <field-map field-name="status" value="importing"/>
+                <field-map field-name="sourceType" value="text"/>
+                <field-map field-name="createdDate" from="ec.user.nowTimestamp"/>
+                <field-map field-name="lastUpdated" from="ec.user.nowTimestamp"/>
+            </service-call>
+            
+            <!-- Deduct credits -->
+            <service-call name="NovelAnimeCreditsServices.consume#Credits">
+                <field-map field-name="userId" from="projectValue.userId"/>
+                <field-map field-name="amount" from="creditsNeeded"/>
+                <field-map field-name="operationType" value="novel_import"/>
+                <field-map field-name="description" value="Import novel: ${title}"/>
+            </service-call>
+            
+            <entity-find-one entity-name="novel.anime.Novel" value-field="novelValue">
+                <field-map field-name="novelId" from="createResult.novelId"/>
+            </entity-find-one>
+            
+            <set field="novel" from="[
+                novelId: novelValue.novelId,
+                projectId: novelValue.projectId,
+                title: novelValue.title,
+                author: novelValue.author,
+                wordCount: novelValue.wordCount,
+                status: novelValue.status,
+                sourceType: novelValue.sourceType,
+                createdDate: novelValue.createdDate
+            ]"/>
+            <set field="success" value="true"/>
+            <set field="creditsUsed" from="creditsNeeded"/>
+        </actions>
     </service>
-    
-    <service verb="get" noun="Novel" type="entity-auto">
-        <description>Get novel by ID implementation</description>
+
+    <service verb="create" noun="NovelFromFile" authenticate="false">
+        <description>Import novel from uploaded file</description>
+        <in-parameters>
+            <parameter name="projectId" type="String" required="true"/>
+            <parameter name="title" type="String"/>
+            <parameter name="author" type="String"/>
+            <parameter name="filename" type="String" required="true"/>
+            <parameter name="fileContent" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="novel" type="Map"/>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="creditsUsed" type="Integer"/>
+        </out-parameters>
+        <actions>
+            <!-- Auto-populate title from filename if not provided -->
+            <if condition="!title">
+                <script><![CDATA[
+                    def baseName = filename.replaceAll(/\.[^.]+$/, '')
+                    context.title = baseName.replaceAll(/[_-]/, ' ')
+                ]]></script>
+            </if>
+            
+            <!-- Call text import service -->
+            <service-call name="create#NovelFromText" out-map="importResult">
+                <field-map field-name="projectId" from="projectId"/>
+                <field-map field-name="title" from="title"/>
+                <field-map field-name="author" from="author"/>
+                <field-map field-name="content" from="fileContent"/>
+            </service-call>
+            
+            <!-- Update novel with file information -->
+            <if condition="importResult.success">
+                <entity-find-one entity-name="novel.anime.Novel" value-field="novelValue">
+                    <field-map field-name="novelId" from="importResult.novel.novelId"/>
+                </entity-find-one>
+                <set field="novelValue.sourceType" value="file"/>
+                <set field="novelValue.filename" from="filename"/>
+                <entity-update value-field="novelValue"/>
+                
+                <set field="novel" from="importResult.novel"/>
+                <set field="novel.sourceType" value="file"/>
+                <set field="novel.filename" from="filename"/>
+            </if>
+            
+            <set field="success" from="importResult.success"/>
+            <set field="creditsUsed" from="importResult.creditsUsed"/>
+        </actions>
+    </service>
+
+    <service verb="extract" noun="FileContent" authenticate="false">
+        <description>Extract text content from uploaded file</description>
+        <in-parameters>
+            <parameter name="filename" type="String" required="true"/>
+            <parameter name="fileBytes" type="Object" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="content" type="String"/>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="wordCount" type="Integer"/>
+            <parameter name="extractedTitle" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.io.ByteArrayInputStream
+                import java.nio.charset.StandardCharsets
+                
+                def fileExtension = filename.toLowerCase().substring(filename.lastIndexOf('.') + 1)
+                def extractedContent = ""
+                def extractedTitle = filename.replaceAll(/\.[^.]+$/, '').replaceAll(/[_-]/, ' ')
+                
+                try {
+                    switch (fileExtension) {
+                        case 'txt':
+                            // Simple text file
+                            extractedContent = new String(fileBytes, StandardCharsets.UTF_8)
+                            break
+                            
+                        case 'docx':
+                            // For now, treat as text (in production, would use Apache POI)
+                            ec.logger.warn("DOCX parsing not fully implemented, treating as text")
+                            extractedContent = new String(fileBytes, StandardCharsets.UTF_8)
+                            break
+                            
+                        case 'pdf':
+                            // For now, treat as text (in production, would use PDFBox)
+                            ec.logger.warn("PDF parsing not fully implemented, treating as text")
+                            extractedContent = new String(fileBytes, StandardCharsets.UTF_8)
+                            break
+                            
+                        default:
+                            ec.message.addError("Unsupported file format: ${fileExtension}. Supported formats: txt, docx, pdf")
+                            return
+                    }
+                    
+                    // Clean up content
+                    extractedContent = extractedContent.trim()
+                    if (extractedContent.isEmpty()) {
+                        ec.message.addError("File appears to be empty or content could not be extracted")
+                        return
+                    }
+                    
+                    // Calculate word count
+                    def wordCount = Math.max(100, Math.ceil(extractedContent.length() / 2.0))
+                    
+                    context.content = extractedContent
+                    context.wordCount = wordCount
+                    context.extractedTitle = extractedTitle
+                    context.success = true
+                    
+                } catch (Exception e) {
+                    ec.logger.error("Error extracting file content", e)
+                    ec.message.addError("Failed to extract content from file: ${e.message}")
+                    context.success = false
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Existing Novel Services -->
+    <service verb="get" noun="Novel">
+        <description>Get novel by ID</description>
         <in-parameters>
             <parameter name="novelId" type="String" required="true"/>
         </in-parameters>
@@ -29,12 +423,20 @@
                     <order-by field-name="chapterNumber"/>
                 </entity-find>
                 
+                <!-- Get processing pipeline -->
+                <entity-find-one entity-name="novel.anime.ProcessingPipeline" value-field="pipelineValue">
+                    <field-map field-name="novelId" from="novelId"/>
+                </entity-find-one>
+                
                 <set field="novel" from="[
                     novelId: novelValue.novelId,
+                    projectId: novelValue.projectId,
                     title: novelValue.title,
                     author: novelValue.author,
                     wordCount: novelValue.wordCount,
                     status: novelValue.status,
+                    sourceType: novelValue.sourceType,
+                    filename: novelValue.filename,
                     createdDate: novelValue.createdDate,
                     lastUpdated: novelValue.lastUpdated,
                     chapters: chapterList.collect { [
@@ -44,56 +446,57 @@
                         wordCount: it.wordCount,
                         scenes: []
                     ] },
-                    metadata: [
-                        wordCount: novelValue.wordCount,
-                        language: 'auto-detected',
-                        description: 'Generated from uploaded novel'
-                    ]
+                    pipeline: pipelineValue ? [
+                        pipelineId: pipelineValue.pipelineId,
+                        status: pipelineValue.status,
+                        currentStage: pipelineValue.currentStage,
+                        completedStages: pipelineValue.completedStages,
+                        totalStages: pipelineValue.totalStages,
+                        creditsUsed: pipelineValue.creditsUsed
+                    ] : null
                 ]"/>
             </if>
         </actions>
     </service>
 
-    <service verb="get" noun="Novels" type="interface">
-        <description>List all novels</description>
+    <service verb="get" noun="Novels" authenticate="false">
+        <description>List novels, optionally filtered by projectId</description>
+        <in-parameters>
+            <parameter name="projectId" type="String"/>
+        </in-parameters>
         <out-parameters>
             <parameter name="novels" type="List"/>
-        </out-parameters>
-    </service>
-    
-    <service verb="get" noun="Novels" type="entity-auto">
-        <description>List all novels implementation</description>
-        <out-parameters>
-            <parameter name="novels" type="List"/>
+            <parameter name="success" type="Boolean"/>
         </out-parameters>
         <actions>
-            <entity-find entity-name="novel.anime.Novel" list="novelList">
-                <order-by field-name="-createdDate"/>
-            </entity-find>
+            <if condition="projectId">
+                <entity-find entity-name="novel.anime.Novel" list="novelList">
+                    <econdition field-name="projectId" from="projectId"/>
+                    <order-by field-name="-createdDate"/>
+                </entity-find>
+            <else>
+                <entity-find entity-name="novel.anime.Novel" list="novelList">
+                    <order-by field-name="-createdDate"/>
+                </entity-find>
+            </else>
+            </if>
             
             <set field="novels" from="novelList.collect { [
                 novelId: it.novelId,
+                projectId: it.projectId,
                 title: it.title,
                 author: it.author,
                 wordCount: it.wordCount,
                 status: it.status,
+                sourceType: it.sourceType,
                 createdDate: it.createdDate
             ] }"/>
+            <set field="success" value="true"/>
         </actions>
     </service>
 
-    <service verb="delete" noun="Novel" type="interface">
+    <service verb="delete" noun="Novel">
         <description>Delete novel by ID</description>
-        <in-parameters>
-            <parameter name="novelId" type="String" required="true"/>
-        </in-parameters>
-        <out-parameters>
-            <parameter name="success" type="Boolean"/>
-        </out-parameters>
-    </service>
-    
-    <service verb="delete" noun="Novel" type="entity-auto">
-        <description>Delete novel by ID implementation</description>
         <in-parameters>
             <parameter name="novelId" type="String" required="true"/>
         </in-parameters>
@@ -131,21 +534,8 @@
         </actions>
     </service>
 
-    <service verb="update" noun="Novel" type="interface">
+    <service verb="update" noun="Novel">
         <description>Update novel metadata</description>
-        <in-parameters>
-            <parameter name="novelId" type="String" required="true"/>
-            <parameter name="title" type="String"/>
-            <parameter name="author" type="String"/>
-            <parameter name="status" type="String"/>
-        </in-parameters>
-        <out-parameters>
-            <parameter name="success" type="Boolean"/>
-        </out-parameters>
-    </service>
-    
-    <service verb="update" noun="Novel" type="entity-auto">
-        <description>Update novel metadata implementation</description>
         <in-parameters>
             <parameter name="novelId" type="String" required="true"/>
             <parameter name="title" type="String"/>

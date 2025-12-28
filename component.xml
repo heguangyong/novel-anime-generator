@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/moqui-component-3.xsd"
+        name="novel-anime-generator" version="1.0.0">
+    <component-depend name="mantle-udm"/>
+    
+    <!-- Load demo/test data -->
+    <entity-facade>
+        <load-data types="demo"/>
+    </entity-facade>
+</component>

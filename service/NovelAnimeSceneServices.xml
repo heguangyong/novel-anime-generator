@@ -1,0 +1,308 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- Scene Analysis and Management Services -->
+    
+    <service verb="enhance" noun="Scenes" authenticate="anonymous-all">
+        <description>Enhance scenes with AI visual analysis</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="scenesEnhanced" type="Integer"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <!-- Get chapters for this novel first -->
+            <entity-find entity-name="novel.anime.Chapter" list="chapterList">
+                <econdition field-name="novelId" from="novelId"/>
+            </entity-find>
+            
+            <!-- Get scenes that need enhancement -->
+            <if condition="chapterList">
+                <entity-find entity-name="novel.anime.Scene" list="sceneList">
+                    <econdition field-name="chapterId" operator="in" from="chapterList.collect { it.chapterId }"/>
+                    <econdition field-name="analysisStatus" operator="not-equals" value="enhanced"/>
+                </entity-find>
+                <else>
+                    <set field="sceneList" from="[]"/>
+                </else>
+            </if>
+            
+            <set field="scenesEnhanced" value="0"/>
+            
+            <iterate list="sceneList" entry="scene">
+                <service-call name="NovelAnimeSceneServices.analyze#SceneVisuals" out-map="analysisResult">
+                    <field-map field-name="sceneId" from="scene.sceneId"/>
+                    <field-map field-name="content" from="scene.content"/>
+                </service-call>
+                
+                <if condition="analysisResult.success">
+                    <set field="scenesEnhanced" from="scenesEnhanced + 1"/>
+                </if>
+            </iterate>
+            
+            <set field="success" value="true"/>
+            <set field="message" value="Enhanced ${scenesEnhanced} scenes"/>
+        </actions>
+    </service>
+
+    <service verb="analyze" noun="SceneVisuals" authenticate="anonymous-all">
+        <description>Analyze scene for visual elements, mood, and setting</description>
+        <in-parameters>
+            <parameter name="sceneId" type="String" required="true"/>
+            <parameter name="content" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="visualDescription" type="String"/>
+            <parameter name="timeOfDay" type="String"/>
+            <parameter name="weather" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // AI visual analysis simulation (in production, would use Zhipu AI GLM-4V)
+                def content = context.content.toLowerCase()
+                def visualDescription = ""
+                def timeOfDay = "未知"
+                def weather = "晴朗"
+                
+                // Time of day analysis
+                if (content.contains("早晨") || content.contains("清晨") || content.contains("黎明")) {
+                    timeOfDay = "早晨"
+                } else if (content.contains("中午") || content.contains("正午")) {
+                    timeOfDay = "中午"
+                } else if (content.contains("下午") || content.contains("午后")) {
+                    timeOfDay = "下午"
+                } else if (content.contains("傍晚") || content.contains("黄昏")) {
+                    timeOfDay = "傍晚"
+                } else if (content.contains("夜晚") || content.contains("深夜") || content.contains("雨夜")) {
+                    timeOfDay = "夜晚"
+                }
+                
+                // Weather analysis
+                if (content.contains("雨") || content.contains("下雨")) {
+                    weather = "雨天"
+                } else if (content.contains("雪") || content.contains("下雪")) {
+                    weather = "雪天"
+                } else if (content.contains("风") || content.contains("大风")) {
+                    weather = "多风"
+                } else if (content.contains("雾") || content.contains("迷雾")) {
+                    weather = "雾天"
+                } else if (content.contains("阴") || content.contains("阴天")) {
+                    weather = "阴天"
+                }
+                
+                // Visual description generation
+                def visualElements = []
+                
+                // Setting elements
+                if (content.contains("房间") || content.contains("屋子")) {
+                    visualElements.add("室内场景，温馨的房间环境")
+                } else if (content.contains("森林") || content.contains("树林")) {
+                    visualElements.add("茂密的森林，阳光透过树叶洒下")
+                } else if (content.contains("山") || content.contains("高山")) {
+                    visualElements.add("雄伟的山峰，云雾缭绕")
+                } else if (content.contains("河") || content.contains("江")) {
+                    visualElements.add("清澈的河流，波光粼粼")
+                } else if (content.contains("城市") || content.contains("街道")) {
+                    visualElements.add("繁华的城市街道，人来人往")
+                }
+                
+                // Character elements
+                if (content.contains("老人") || content.contains("老者")) {
+                    visualElements.add("神秘的老者，白发苍苍，眼神深邃")
+                }
+                
+                // Action elements
+                if (content.contains("战斗") || content.contains("打斗")) {
+                    visualElements.add("激烈的战斗场面，动作流畅")
+                } else if (content.contains("修炼") || content.contains("练功")) {
+                    visualElements.add("专注的修炼姿态，内力流转")
+                }
+                
+                // Mood elements
+                if (content.contains("紧张") || content.contains("危险")) {
+                    visualElements.add("紧张的氛围，暗色调渲染")
+                } else if (content.contains("平静") || content.contains("安静")) {
+                    visualElements.add("宁静祥和的氛围，柔和光线")
+                }
+                
+                if (visualElements.isEmpty()) {
+                    visualElements.add("基础场景设置，需要进一步完善视觉描述")
+                }
+                
+                visualDescription = visualElements.join("；")
+                
+                context.visualDescription = visualDescription
+                context.timeOfDay = timeOfDay
+                context.weather = weather
+                context.success = true
+            ]]></script>
+            
+            <!-- Update scene with analysis results -->
+            <entity-find-one entity-name="novel.anime.Scene" value-field="sceneValue">
+                <field-map field-name="sceneId" from="sceneId"/>
+            </entity-find-one>
+            
+            <if condition="sceneValue">
+                <set field="sceneValue.visualDescription" from="visualDescription"/>
+                <set field="sceneValue.timeOfDay" from="timeOfDay"/>
+                <set field="sceneValue.weather" from="weather"/>
+                <set field="sceneValue.analysisStatus" value="enhanced"/>
+                <entity-update value-field="sceneValue"/>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Scenes" authenticate="anonymous-all">
+        <description>Get scene list with filtering and sorting</description>
+        <in-parameters>
+            <parameter name="novelId" type="String" required="true"/>
+            <parameter name="analysisStatus" type="String"/>
+            <parameter name="isApproved" type="String"/>
+            <parameter name="mood" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="scenes" type="List"/>
+            <parameter name="totalCount" type="Integer"/>
+        </out-parameters>
+        <actions>
+            <!-- Get chapters for this novel first -->
+            <entity-find entity-name="novel.anime.Chapter" list="chapterList">
+                <econdition field-name="novelId" from="novelId"/>
+            </entity-find>
+            
+            <!-- Get scenes for these chapters -->
+            <if condition="chapterList">
+                <entity-find entity-name="novel.anime.Scene" list="sceneList">
+                    <econdition field-name="chapterId" operator="in" from="chapterList.collect { it.chapterId }"/>
+                    <econdition field-name="analysisStatus" from="analysisStatus" ignore-if-empty="true"/>
+                    <econdition field-name="isApproved" from="isApproved" ignore-if-empty="true"/>
+                    <econdition field-name="mood" from="mood" ignore-if-empty="true"/>
+                    <order-by field-name="sceneNumber"/>
+                </entity-find>
+                <else>
+                    <set field="sceneList" from="[]"/>
+                </else>
+            </if>
+            
+            <set field="scenes" from="sceneList.collect { [
+                sceneId: it.sceneId,
+                chapterId: it.chapterId,
+                sceneNumber: it.sceneNumber,
+                content: it.content,
+                setting: it.setting,
+                mood: it.mood,
+                visualDescription: it.visualDescription,
+                timeOfDay: it.timeOfDay,
+                weather: it.weather,
+                analysisStatus: it.analysisStatus,
+                isApproved: it.isApproved
+            ] }"/>
+            <set field="totalCount" from="sceneList.size()"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Scene" authenticate="anonymous-all">
+        <description>Update scene information</description>
+        <in-parameters>
+            <parameter name="sceneId" type="String" required="true"/>
+            <parameter name="content" type="String"/>
+            <parameter name="setting" type="String"/>
+            <parameter name="mood" type="String"/>
+            <parameter name="visualDescription" type="String"/>
+            <parameter name="timeOfDay" type="String"/>
+            <parameter name="weather" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Scene" value-field="sceneValue">
+                <field-map field-name="sceneId" from="sceneId"/>
+            </entity-find-one>
+            
+            <if condition="!sceneValue">
+                <return error="true" message="Scene not found"/>
+            </if>
+            
+            <!-- Update scene fields -->
+            <if condition="content"><set field="sceneValue.content" from="content"/></if>
+            <if condition="setting"><set field="sceneValue.setting" from="setting"/></if>
+            <if condition="mood"><set field="sceneValue.mood" from="mood"/></if>
+            <if condition="visualDescription"><set field="sceneValue.visualDescription" from="visualDescription"/></if>
+            <if condition="timeOfDay"><set field="sceneValue.timeOfDay" from="timeOfDay"/></if>
+            <if condition="weather"><set field="sceneValue.weather" from="weather"/></if>
+            
+            <entity-update value-field="sceneValue"/>
+            
+            <set field="success" value="true"/>
+            <set field="message" value="Scene updated successfully"/>
+        </actions>
+    </service>
+
+    <service verb="approve" noun="Scene" authenticate="anonymous-all">
+        <description>Approve or reject scene analysis</description>
+        <in-parameters>
+            <parameter name="sceneId" type="String" required="true"/>
+            <parameter name="isApproved" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Scene" value-field="sceneValue">
+                <field-map field-name="sceneId" from="sceneId"/>
+            </entity-find-one>
+            
+            <if condition="!sceneValue">
+                <return error="true" message="Scene not found"/>
+            </if>
+            
+            <set field="sceneValue.isApproved" from="isApproved"/>
+            <entity-update value-field="sceneValue"/>
+            
+            <set field="success" value="true"/>
+            <set field="message" value="Scene approval status updated"/>
+        </actions>
+    </service>
+
+    <service verb="reanalyze" noun="Scene" authenticate="anonymous-all">
+        <description>Re-run AI analysis on a scene</description>
+        <in-parameters>
+            <parameter name="sceneId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Scene" value-field="sceneValue">
+                <field-map field-name="sceneId" from="sceneId"/>
+            </entity-find-one>
+            
+            <if condition="!sceneValue">
+                <return error="true" message="Scene not found"/>
+            </if>
+            
+            <!-- Reset analysis status -->
+            <set field="sceneValue.analysisStatus" value="pending"/>
+            <set field="sceneValue.isApproved" value="N"/>
+            <entity-update value-field="sceneValue"/>
+            
+            <!-- Re-run analysis -->
+            <service-call name="NovelAnimeSceneServices.analyze#SceneVisuals" out-map="analysisResult">
+                <field-map field-name="sceneId" from="sceneId"/>
+                <field-map field-name="content" from="sceneValue.content"/>
+            </service-call>
+            
+            <set field="success" from="analysisResult.success"/>
+            <set field="message" value="Scene re-analysis completed"/>
+        </actions>
+    </service>
+
+</services>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<entity-facade-xml type="demo">
+    <!-- Demo/Test User for Development -->
+    <novel.anime.user.NovelAnimeUser 
+        userId="test-user-001" 
+        email="test@novelanime.local"
+        username="测试用户"
+        credits="1000"
+        status="active"/>
+    
+    <!-- Demo Project -->
+    <novel.anime.Project 
+        projectId="demo-project-001"
+        name="示例项目"
+        description="这是一个用于测试的示例项目"
+        userId="test-user-001"
+        status="active"/>
+</entity-facade-xml>
