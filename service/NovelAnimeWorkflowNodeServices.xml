@@ -1,0 +1,422 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- ========== Workflow Node Registry Services ========== -->
+    
+    <service verb="get" noun="NodeTypes" authenticate="anonymous-all">
+        <description>获取所有可用的节点类型定义</description>
+        <out-parameters>
+            <parameter name="nodeTypes" type="Map"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // 定义所有节点类型
+                nodeTypes = [
+                    // 输入节点
+                    input: [
+                        INPUT_NOVEL: [
+                            id: 'INPUT_NOVEL',
+                            type: 'input',
+                            name: '小说输入',
+                            description: '从项目中选择小说文本作为输入',
+                            icon: '📖',
+                            category: 'input',
+                            inputs: [],
+                            outputs: [
+                                [id: 'text', name: '文本内容', type: 'text', required: true]
+                            ],
+                            config: [
+                                [id: 'novelId', name: '小说ID', type: 'select', required: true, source: 'novels'],
+                                [id: 'chapterId', name: '章节ID', type: 'select', required: false, source: 'chapters']
+                            ]
+                        ],
+                        INPUT_CHARACTER: [
+                            id: 'INPUT_CHARACTER',
+                            type: 'input',
+                            name: '角色输入',
+                            description: '从项目中选择角色数据作为输入',
+                            icon: '👤',
+                            category: 'input',
+                            inputs: [],
+                            outputs: [
+                                [id: 'characters', name: '角色数据', type: 'data', required: true]
+                            ],
+                            config: [
+                                [id: 'characterIds', name: '角色ID列表', type: 'multiselect', required: true, source: 'characters']
+                            ]
+                        ],
+                        INPUT_ASSET: [
+                            id: 'INPUT_ASSET',
+                            type: 'input',
+                            name: '素材输入',
+                            description: '从素材库中选择资源作为输入',
+                            icon: '🎨',
+                            category: 'input',
+                            inputs: [],
+                            outputs: [
+                                [id: 'assets', name: '素材列表', type: 'data', required: true]
+                            ],
+                            config: [
+                                [id: 'assetType', name: '素材类型', type: 'select', required: true, 
+                                  options: ['image', 'audio', 'video']],
+                                [id: 'assetIds', name: '素材ID列表', type: 'multiselect', required: true, source: 'assets']
+                            ]
+                        ]
+                    ],
+                    
+                    // 处理节点
+                    process: [
+                        PROCESS_SCENE_ANALYSIS: [
+                            id: 'PROCESS_SCENE_ANALYSIS',
+                            type: 'process',
+                            name: '场景分析',
+                            description: '分析文本内容，识别场景信息',
+                            icon: '🎬',
+                            category: 'process',
+                            inputs: [
+                                [id: 'text', name: '文本', type: 'text', required: true]
+                            ],
+                            outputs: [
+                                [id: 'scenes', name: '场景列表', type: 'data', required: true]
+                            ],
+                            config: [
+                                [id: 'useAI', name: '使用AI分析', type: 'boolean', default: true],
+                                [id: 'minSceneLength', name: '最小场景长度', type: 'number', default: 100]
+                            ]
+                        ],
+                        PROCESS_DIALOGUE_EXTRACT: [
+                            id: 'PROCESS_DIALOGUE_EXTRACT',
+                            type: 'process',
+                            name: '对话提取',
+                            description: '从文本中提取对话内容',
+                            icon: '💬',
+                            category: 'process',
+                            inputs: [
+                                [id: 'text', name: '文本', type: 'text', required: true]
+                            ],
+                            outputs: [
+                                [id: 'dialogues', name: '对话列表', type: 'data', required: true]
+                            ],
+                            config: [
+                                [id: 'useAI', name: '使用AI提取', type: 'boolean', default: true],
+                                [id: 'includeNarration', name: '包含旁白', type: 'boolean', default: false]
+                            ]
+                        ],
+                        PROCESS_EMOTION_ANALYSIS: [
+                            id: 'PROCESS_EMOTION_ANALYSIS',
+                            type: 'process',
+                            name: '情感分析',
+                            description: '分析文本的情感基调',
+                            icon: '😊',
+                            category: 'process',
+                            inputs: [
+                                [id: 'text', name: '文本', type: 'text', required: true]
+                            ],
+                            outputs: [
+                                [id: 'emotion', name: '情感数据', type: 'data', required: true]
+                            ],
+                            config: [
+                                [id: 'useAI', name: '使用AI分析', type: 'boolean', default: true],
+                                [id: 'detailLevel', name: '详细程度', type: 'select', 
+                                  options: ['basic', 'detailed'], default: 'basic']
+                            ]
+                        ],
+                        PROCESS_CHAPTER_SPLIT: [
+                            id: 'PROCESS_CHAPTER_SPLIT',
+                            type: 'process',
+                            name: '章节分割',
+                            description: '将文本分割成章节',
+                            icon: '📑',
+                            category: 'process',
+                            inputs: [
+                                [id: 'text', name: '文本', type: 'text', required: true]
+                            ],
+                            outputs: [
+                                [id: 'chapters', name: '章节列表', type: 'data', required: true]
+                            ],
+                            config: [
+                                [id: 'pattern', name: '章节模式', type: 'select', 
+                                  options: ['auto', 'chinese', 'english', 'custom'], default: 'auto'],
+                                [id: 'customPattern', name: '自定义模式', type: 'text', required: false]
+                            ]
+                        ]
+                    ],
+                    
+                    // AI节点
+                    ai: [
+                        AI_CHARACTER_GENERATE: [
+                            id: 'AI_CHARACTER_GENERATE',
+                            type: 'ai',
+                            name: 'AI角色生成',
+                            description: '使用AI生成角色描述和属性',
+                            icon: '🤖',
+                            category: 'ai',
+                            inputs: [
+                                [id: 'description', name: '角色描述', type: 'data', required: true]
+                            ],
+                            outputs: [
+                                [id: 'character', name: '角色数据', type: 'data', required: true]
+                            ],
+                            config: [
+                                [id: 'model', name: 'AI模型', type: 'select', 
+                                  options: ['glm-4', 'glm-4-plus'], default: 'glm-4'],
+                                [id: 'temperature', name: '创造性', type: 'number', default: 0.7, min: 0, max: 1]
+                            ]
+                        ],
+                        AI_SCENE_RENDER: [
+                            id: 'AI_SCENE_RENDER',
+                            type: 'ai',
+                            name: 'AI场景渲染',
+                            description: '使用AI生成场景图片（预留接口）',
+                            icon: '🎨',
+                            category: 'ai',
+                            inputs: [
+                                [id: 'sceneDescription', name: '场景描述', type: 'data', required: true]
+                            ],
+                            outputs: [
+                                [id: 'image', name: '场景图片', type: 'image', required: true]
+                            ],
+                            config: [
+                                [id: 'style', name: '风格', type: 'select', 
+                                  options: ['anime', 'realistic', 'cartoon'], default: 'anime'],
+                                [id: 'resolution', name: '分辨率', type: 'select', 
+                                  options: ['512x512', '1024x1024', '1920x1080'], default: '1024x1024']
+                            ],
+                            status: 'coming_soon'
+                        ],
+                        AI_VOICE_SYNTHESIS: [
+                            id: 'AI_VOICE_SYNTHESIS',
+                            type: 'ai',
+                            name: 'AI配音合成',
+                            description: '使用AI生成语音配音（预留接口）',
+                            icon: '🎤',
+                            category: 'ai',
+                            inputs: [
+                                [id: 'text', name: '文本', type: 'text', required: true],
+                                [id: 'character', name: '角色', type: 'data', required: false]
+                            ],
+                            outputs: [
+                                [id: 'audio', name: '音频', type: 'audio', required: true]
+                            ],
+                            config: [
+                                [id: 'voice', name: '声音', type: 'select', 
+                                  options: ['male', 'female', 'child'], default: 'male'],
+                                [id: 'speed', name: '语速', type: 'number', default: 1.0, min: 0.5, max: 2.0]
+                            ],
+                            status: 'coming_soon'
+                        ]
+                    ],
+                    
+                    // 输出节点
+                    output: [
+                        OUTPUT_JSON: [
+                            id: 'OUTPUT_JSON',
+                            type: 'output',
+                            name: 'JSON导出',
+                            description: '将数据导出为JSON格式',
+                            icon: '📄',
+                            category: 'output',
+                            inputs: [
+                                [id: 'data', name: '数据', type: 'data', required: true]
+                            ],
+                            outputs: [],
+                            config: [
+                                [id: 'filename', name: '文件名', type: 'text', required: true],
+                                [id: 'pretty', name: '格式化输出', type: 'boolean', default: true]
+                            ]
+                        ],
+                        OUTPUT_TEXT: [
+                            id: 'OUTPUT_TEXT',
+                            type: 'output',
+                            name: '文本导出',
+                            description: '将内容导出为文本文件',
+                            icon: '📝',
+                            category: 'output',
+                            inputs: [
+                                [id: 'text', name: '文本', type: 'text', required: true]
+                            ],
+                            outputs: [],
+                            config: [
+                                [id: 'filename', name: '文件名', type: 'text', required: true],
+                                [id: 'encoding', name: '编码', type: 'select', 
+                                  options: ['UTF-8', 'GBK'], default: 'UTF-8']
+                            ]
+                        ],
+                        OUTPUT_REPORT: [
+                            id: 'OUTPUT_REPORT',
+                            type: 'output',
+                            name: '报告生成',
+                            description: '生成分析报告',
+                            icon: '📊',
+                            category: 'output',
+                            inputs: [
+                                [id: 'data', name: '数据', type: 'data', required: true]
+                            ],
+                            outputs: [],
+                            config: [
+                                [id: 'format', name: '格式', type: 'select', 
+                                  options: ['html', 'pdf', 'markdown'], default: 'html'],
+                                [id: 'template', name: '模板', type: 'select', 
+                                  options: ['default', 'detailed', 'summary'], default: 'default']
+                            ]
+                        ]
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="NodeType" authenticate="anonymous-all">
+        <description>获取单个节点类型定义</description>
+        <in-parameters>
+            <parameter name="nodeTypeId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="nodeType" type="Map"/>
+        </out-parameters>
+        <actions>
+            <service-call name="NovelAnimeWorkflowNodeServices.get#NodeTypes" out-map="typesResult"/>
+            <script><![CDATA[
+                def allTypes = typesResult.nodeTypes
+                def nodeType = null
+                
+                // 在所有分类中查找节点类型
+                allTypes.each { category, types ->
+                    if (types.containsKey(nodeTypeId)) {
+                        nodeType = types[nodeTypeId]
+                    }
+                }
+                
+                context.nodeType = nodeType
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="validate" noun="NodeConfig" authenticate="anonymous-all">
+        <description>验证节点配置是否有效</description>
+        <in-parameters>
+            <parameter name="nodeTypeId" type="String" required="true"/>
+            <parameter name="config" type="Map" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="valid" type="Boolean"/>
+            <parameter name="errors" type="List"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                def errors = []
+                
+                // 获取节点类型定义
+                def nodeTypeResult = ec.service.sync().name("NovelAnimeWorkflowNodeServices.get#NodeType")
+                    .parameter("nodeTypeId", nodeTypeId).call()
+                
+                def nodeType = nodeTypeResult.nodeType
+                
+                if (!nodeType) {
+                    errors.add("未知的节点类型: ${nodeTypeId}")
+                    context.valid = false
+                    context.errors = errors
+                    return
+                }
+                
+                // 验证必需的配置项
+                nodeType.config?.each { configDef ->
+                    if (configDef.required && !config.containsKey(configDef.id)) {
+                        errors.add("缺少必需的配置项: ${configDef.name}")
+                    }
+                    
+                    // 验证数据类型
+                    if (config.containsKey(configDef.id)) {
+                        def value = config[configDef.id]
+                        switch (configDef.type) {
+                            case 'number':
+                                if (!(value instanceof Number)) {
+                                    errors.add("${configDef.name} 必须是数字")
+                                }
+                                if (configDef.min != null && value < configDef.min) {
+                                    errors.add("${configDef.name} 不能小于 ${configDef.min}")
+                                }
+                                if (configDef.max != null && value > configDef.max) {
+                                    errors.add("${configDef.name} 不能大于 ${configDef.max}")
+                                }
+                                break
+                            case 'boolean':
+                                if (!(value instanceof Boolean)) {
+                                    errors.add("${configDef.name} 必须是布尔值")
+                                }
+                                break
+                            case 'select':
+                                if (configDef.options && !configDef.options.contains(value)) {
+                                    errors.add("${configDef.name} 的值必须是: ${configDef.options.join(', ')}")
+                                }
+                                break
+                        }
+                    }
+                }
+                
+                context.valid = errors.isEmpty()
+                context.errors = errors
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="validate" noun="NodeConnection" authenticate="anonymous-all">
+        <description>验证节点连接是否兼容</description>
+        <in-parameters>
+            <parameter name="fromNodeType" type="String" required="true"/>
+            <parameter name="fromPortId" type="String" required="true"/>
+            <parameter name="toNodeType" type="String" required="true"/>
+            <parameter name="toPortId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="compatible" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // 获取节点类型定义
+                def fromNodeResult = ec.service.sync().name("NovelAnimeWorkflowNodeServices.get#NodeType")
+                    .parameter("nodeTypeId", fromNodeType).call()
+                def toNodeResult = ec.service.sync().name("NovelAnimeWorkflowNodeServices.get#NodeType")
+                    .parameter("nodeTypeId", toNodeType).call()
+                
+                def fromNode = fromNodeResult.nodeType
+                def toNode = toNodeResult.nodeType
+                
+                if (!fromNode || !toNode) {
+                    context.compatible = false
+                    context.message = "节点类型不存在"
+                    return
+                }
+                
+                // 查找输出端口
+                def fromPort = fromNode.outputs?.find { it.id == fromPortId }
+                if (!fromPort) {
+                    context.compatible = false
+                    context.message = "源节点没有该输出端口"
+                    return
+                }
+                
+                // 查找输入端口
+                def toPort = toNode.inputs?.find { it.id == toPortId }
+                if (!toPort) {
+                    context.compatible = false
+                    context.message = "目标节点没有该输入端口"
+                    return
+                }
+                
+                // 检查类型兼容性
+                if (fromPort.type != toPort.type) {
+                    context.compatible = false
+                    context.message = "端口类型不兼容: ${fromPort.type} -> ${toPort.type}"
+                    return
+                }
+                
+                context.compatible = true
+                context.message = "连接兼容"
+            ]]></script>
+        </actions>
+    </service>
+
+</services>

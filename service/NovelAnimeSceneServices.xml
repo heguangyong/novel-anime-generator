@@ -192,6 +192,7 @@
                 sceneId: it.sceneId,
                 chapterId: it.chapterId,
                 sceneNumber: it.sceneNumber,
+                title: it.title,
                 content: it.content,
                 setting: it.setting,
                 mood: it.mood,
@@ -209,6 +210,7 @@
         <description>Update scene information</description>
         <in-parameters>
             <parameter name="sceneId" type="String" required="true"/>
+            <parameter name="title" type="String"/>
             <parameter name="content" type="String"/>
             <parameter name="setting" type="String"/>
             <parameter name="mood" type="String"/>
@@ -230,6 +232,7 @@
             </if>
             
             <!-- Update scene fields -->
+            <if condition="title"><set field="sceneValue.title" from="title"/></if>
             <if condition="content"><set field="sceneValue.content" from="content"/></if>
             <if condition="setting"><set field="sceneValue.setting" from="setting"/></if>
             <if condition="mood"><set field="sceneValue.mood" from="mood"/></if>

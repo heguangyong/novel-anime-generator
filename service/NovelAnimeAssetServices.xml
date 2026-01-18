@@ -1,0 +1,692 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- ========== Asset CRUD Services ========== -->
+
+    <service verb="get" noun="Assets">
+        <description>获取资源列表</description>
+        <in-parameters>
+            <parameter name="projectId" type="String"/>
+            <parameter name="novelId" type="String"/>
+            <parameter name="userId" type="String"/>
+            <parameter name="assetType" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="assets" type="List"/>
+        </out-parameters>
+        <actions>
+            <entity-find entity-name="novel.anime.Asset" list="assetList">
+                <econdition field-name="projectId" from="projectId" ignore-if-empty="true"/>
+                <econdition field-name="novelId" from="novelId" ignore-if-empty="true"/>
+                <econdition field-name="userId" from="userId" ignore-if-empty="true"/>
+                <econdition field-name="assetType" from="assetType" ignore-if-empty="true"/>
+                <order-by field-name="-createdDate"/>
+            </entity-find>
+            <set field="assets" from="[]"/>
+            <iterate list="assetList" entry="asset">
+                <script><![CDATA[
+                    def a = [
+                        assetId: asset.assetId,
+                        projectId: asset.projectId,
+                        novelId: asset.novelId,
+                        userId: asset.userId,
+                        type: asset.assetType,
+                        name: asset.name,
+                        description: asset.description,
+                        path: asset.filePath,
+                        size: asset.fileSize,
+                        metadata: asset.metadata ? new groovy.json.JsonSlurper().parseText(asset.metadata) : null,
+                        version: asset.version,
+                        isShared: asset.isShared == 'Y',
+                        createdDate: asset.createdDate,
+                        lastUpdatedDate: asset.lastUpdatedDate
+                    ]
+                    assets.add(a)
+                ]]></script>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Asset">
+        <description>获取单个资源详情</description>
+        <in-parameters>
+            <parameter name="assetId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="asset" type="Map"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Asset" value-field="assetEntity">
+                <field-map field-name="assetId"/>
+            </entity-find-one>
+            <if condition="assetEntity">
+                <script><![CDATA[
+                    asset = [
+                        assetId: assetEntity.assetId,
+                        projectId: assetEntity.projectId,
+                        novelId: assetEntity.novelId,
+                        userId: assetEntity.userId,
+                        type: assetEntity.assetType,
+                        name: assetEntity.name,
+                        description: assetEntity.description,
+                        path: assetEntity.filePath,
+                        size: assetEntity.fileSize,
+                        metadata: assetEntity.metadata ? new groovy.json.JsonSlurper().parseText(assetEntity.metadata) : null,
+                        version: assetEntity.version,
+                        isShared: assetEntity.isShared == 'Y',
+                        createdDate: assetEntity.createdDate,
+                        lastUpdatedDate: assetEntity.lastUpdatedDate
+                    ]
+                ]]></script>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="create" noun="Asset">
+        <description>创建资源记录</description>
+        <in-parameters>
+            <parameter name="projectId" type="String"/>
+            <parameter name="novelId" type="String"/>
+            <parameter name="userId" type="String"/>
+            <parameter name="assetType" type="String" required="true"/>
+            <parameter name="name" type="String" required="true"/>
+            <parameter name="description" type="String"/>
+            <parameter name="filePath" type="String"/>
+            <parameter name="fileSize" type="Integer"/>
+            <parameter name="metadata" type="Map"/>
+            <parameter name="version" type="String"/>
+            <parameter name="isShared" type="String" default-value="N"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="assetId" type="String"/>
+        </out-parameters>
+        <actions>
+            <set field="assetId" from="ec.entity.sequencedIdPrimary('novel.anime.Asset', null, null)"/>
+            <script><![CDATA[
+                metadataJson = metadata ? new groovy.json.JsonBuilder(metadata).toString() : null
+            ]]></script>
+            <service-call name="create#novel.anime.Asset" in-map="[
+                assetId: assetId,
+                projectId: projectId,
+                novelId: novelId,
+                userId: userId,
+                assetType: assetType,
+                name: name,
+                description: description,
+                filePath: filePath,
+                fileSize: fileSize,
+                metadata: metadataJson,
+                version: version,
+                isShared: isShared,
+                createdDate: ec.user.nowTimestamp,
+                lastUpdatedDate: ec.user.nowTimestamp
+            ]"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Asset">
+        <description>更新资源</description>
+        <in-parameters>
+            <parameter name="assetId" type="String" required="true"/>
+            <parameter name="name" type="String"/>
+            <parameter name="description" type="String"/>
+            <parameter name="filePath" type="String"/>
+            <parameter name="fileSize" type="Integer"/>
+            <parameter name="metadata" type="Map"/>
+            <parameter name="version" type="String"/>
+            <parameter name="isShared" type="String"/>
+        </in-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Asset" value-field="asset">
+                <field-map field-name="assetId"/>
+            </entity-find-one>
+            <if condition="asset">
+                <set field="updateMap" from="[lastUpdatedDate: ec.user.nowTimestamp]"/>
+                <if condition="name"><set field="updateMap.name" from="name"/></if>
+                <if condition="description != null"><set field="updateMap.description" from="description"/></if>
+                <if condition="filePath"><set field="updateMap.filePath" from="filePath"/></if>
+                <if condition="fileSize != null"><set field="updateMap.fileSize" from="fileSize"/></if>
+                <if condition="metadata != null">
+                    <script><![CDATA[
+                        updateMap.metadata = new groovy.json.JsonBuilder(metadata).toString()
+                    ]]></script>
+                </if>
+                <if condition="version"><set field="updateMap.version" from="version"/></if>
+                <if condition="isShared"><set field="updateMap.isShared" from="isShared"/></if>
+                <service-call name="update#novel.anime.Asset" in-map="updateMap + [assetId: assetId]"/>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="Asset">
+        <description>删除资源</description>
+        <in-parameters>
+            <parameter name="assetId" type="String" required="true"/>
+        </in-parameters>
+        <actions>
+            <!-- 删除版本记录 -->
+            <entity-delete-by-condition entity-name="novel.anime.AssetVersion">
+                <econdition field-name="assetId"/>
+            </entity-delete-by-condition>
+            <!-- 删除资源 -->
+            <service-call name="delete#novel.anime.Asset" in-map="[assetId: assetId]"/>
+        </actions>
+    </service>
+
+    <!-- ========== Asset Upload and Storage Services ========== -->
+
+    <service verb="upload" noun="Asset" authenticate="anonymous-all">
+        <description>上传素材文件</description>
+        <in-parameters>
+            <parameter name="projectId" type="String" required="true"/>
+            <parameter name="novelId" type="String"/>
+            <parameter name="userId" type="String" required="true"/>
+            <parameter name="assetType" type="String" required="true"/> <!-- image, audio, video, document -->
+            <parameter name="name" type="String" required="true"/>
+            <parameter name="description" type="String"/>
+            <parameter name="fileContent" type="Object" required="true"/> <!-- Base64 encoded file content -->
+            <parameter name="fileName" type="String" required="true"/>
+            <parameter name="fileSize" type="Long" required="true"/>
+            <parameter name="mimeType" type="String" required="true"/>
+            <parameter name="tags" type="List"/> <!-- List of tag strings -->
+        </in-parameters>
+        <out-parameters>
+            <parameter name="assetId" type="String"/>
+            <parameter name="filePath" type="String"/>
+        </out-parameters>
+        <actions>
+            <!-- 验证文件类型和大小 -->
+            <service-call name="novel.anime.AssetServices.validate#AssetUpload" in-map="context" out-map="validationResult"/>
+            <if condition="!validationResult.isValid">
+                <return error="true" message="${validationResult.errorMessage}"/>
+            </if>
+
+            <!-- 生成文件路径 -->
+            <set field="assetId" from="ec.entity.sequencedIdPrimary('novel.anime.Asset', null, null)"/>
+            <service-call name="novel.anime.AssetServices.generate#AssetPath" in-map="[
+                projectId: projectId,
+                assetId: assetId,
+                fileName: fileName,
+                assetType: assetType
+            ]" out-map="pathResult"/>
+            <set field="filePath" from="pathResult.filePath"/>
+
+            <!-- 保存文件到磁盘 -->
+            <service-call name="novel.anime.AssetServices.save#AssetFile" in-map="[
+                filePath: filePath,
+                fileContent: fileContent,
+                mimeType: mimeType
+            ]" out-map="saveResult"/>
+
+            <!-- 生成缩略图（如果是图片） -->
+            <if condition="assetType == 'image'">
+                <service-call name="novel.anime.AssetServices.generate#Thumbnail" in-map="[
+                    filePath: filePath,
+                    assetId: assetId
+                ]" out-map="thumbnailResult"/>
+            </if>
+
+            <!-- 提取文件元数据 -->
+            <service-call name="novel.anime.AssetServices.extract#FileMetadata" in-map="[
+                filePath: filePath,
+                mimeType: mimeType,
+                assetType: assetType
+            ]" out-map="metadataResult"/>
+
+            <!-- 创建资源记录 -->
+            <set field="metadata" from="[
+                originalFileName: fileName,
+                mimeType: mimeType,
+                uploadDate: ec.user.nowTimestamp,
+                fileHash: saveResult.fileHash,
+                dimensions: metadataResult.dimensions,
+                duration: metadataResult.duration,
+                tags: tags ?: [],
+                thumbnailPath: thumbnailResult?.thumbnailPath
+            ]"/>
+
+            <service-call name="novel.anime.AssetServices.create#Asset" in-map="[
+                projectId: projectId,
+                novelId: novelId,
+                userId: userId,
+                assetType: assetType,
+                name: name,
+                description: description,
+                filePath: filePath,
+                fileSize: fileSize,
+                metadata: metadata,
+                version: '1.0',
+                isShared: 'N'
+            ]" out-map="createResult"/>
+            <set field="assetId" from="createResult.assetId"/>
+        </actions>
+    </service>
+
+    <service verb="validate" noun="AssetUpload" authenticate="anonymous-all">
+        <description>验证素材上传</description>
+        <in-parameters>
+            <parameter name="assetType" type="String" required="true"/>
+            <parameter name="fileName" type="String" required="true"/>
+            <parameter name="fileSize" type="Long" required="true"/>
+            <parameter name="mimeType" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="isValid" type="Boolean"/>
+            <parameter name="errorMessage" type="String"/>
+        </out-parameters>
+        <actions>
+            <set field="isValid" value="true"/>
+            <set field="errorMessage" value=""/>
+
+            <!-- 文件大小限制 -->
+            <set field="maxSize" value="50000000"/> <!-- 50MB -->
+            <if condition="fileSize > maxSize">
+                <set field="isValid" value="false"/>
+                <set field="errorMessage" value="文件大小超过限制 (50MB)"/>
+                <return/>
+            </if>
+
+            <!-- 文件类型验证 -->
+            <set field="allowedTypes" from="[
+                image: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+                audio: ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4'],
+                video: ['video/mp4', 'video/webm', 'video/ogg'],
+                document: ['application/pdf', 'text/plain', 'application/msword']
+            ]"/>
+
+            <if condition="!allowedTypes[assetType]?.contains(mimeType)">
+                <set field="isValid" value="false"/>
+                <set field="errorMessage" value="不支持的文件类型: ${mimeType}"/>
+                <return/>
+            </if>
+
+            <!-- 文件名验证 -->
+            <if condition="!fileName || fileName.length() > 255">
+                <set field="isValid" value="false"/>
+                <set field="errorMessage" value="文件名无效"/>
+                <return/>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="generate" noun="AssetPath" authenticate="anonymous-all">
+        <description>生成素材文件路径</description>
+        <in-parameters>
+            <parameter name="projectId" type="String" required="true"/>
+            <parameter name="assetId" type="String" required="true"/>
+            <parameter name="fileName" type="String" required="true"/>
+            <parameter name="assetType" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="filePath" type="String"/>
+        </out-parameters>
+        <actions>
+            <!-- 获取文件扩展名 -->
+            <script><![CDATA[
+                def lastDot = fileName.lastIndexOf('.')
+                def extension = lastDot > 0 ? fileName.substring(lastDot) : ''
+                def baseName = lastDot > 0 ? fileName.substring(0, lastDot) : fileName
+                
+                // 清理文件名
+                def cleanBaseName = baseName.replaceAll('[^a-zA-Z0-9\\u4e00-\\u9fa5_-]', '_')
+                def cleanFileName = cleanBaseName + extension
+                
+                // 生成路径: projects/{projectId}/assets/{assetType}/{assetId}_{fileName}
+                filePath = "projects/${projectId}/assets/${assetType}/${assetId}_${cleanFileName}"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="save" noun="AssetFile" authenticate="anonymous-all">
+        <description>保存素材文件到磁盘</description>
+        <in-parameters>
+            <parameter name="filePath" type="String" required="true"/>
+            <parameter name="fileContent" type="Object" required="true"/>
+            <parameter name="mimeType" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="fileHash" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.nio.file.*
+                import java.security.MessageDigest
+                import java.util.Base64
+                
+                try {
+                    // 解码Base64内容
+                    byte[] fileBytes
+                    if (fileContent instanceof String) {
+                        fileBytes = Base64.getDecoder().decode(fileContent)
+                    } else {
+                        fileBytes = fileContent
+                    }
+                    
+                    // 创建目录
+                    def fullPath = Paths.get(ec.ecfi.runtimePath, filePath)
+                    Files.createDirectories(fullPath.getParent())
+                    
+                    // 写入文件
+                    Files.write(fullPath, fileBytes)
+                    
+                    // 计算文件哈希
+                    def md = MessageDigest.getInstance("SHA-256")
+                    md.update(fileBytes)
+                    fileHash = md.digest().encodeHex().toString()
+                    
+                    ec.logger.info("Asset file saved: ${fullPath}")
+                } catch (Exception e) {
+                    ec.logger.error("Failed to save asset file: ${e.message}", e)
+                    ec.message.addError("保存文件失败: ${e.message}")
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="generate" noun="Thumbnail" authenticate="anonymous-all">
+        <description>生成图片缩略图</description>
+        <in-parameters>
+            <parameter name="filePath" type="String" required="true"/>
+            <parameter name="assetId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="thumbnailPath" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import java.awt.image.BufferedImage
+                import java.awt.Graphics2D
+                import java.awt.RenderingHints
+                import javax.imageio.ImageIO
+                import java.nio.file.*
+                
+                try {
+                    def fullPath = Paths.get(ec.ecfi.runtimePath, filePath)
+                    def originalImage = ImageIO.read(fullPath.toFile())
+                    
+                    if (originalImage != null) {
+                        // 计算缩略图尺寸 (最大200x200)
+                        def maxSize = 200
+                        def originalWidth = originalImage.getWidth()
+                        def originalHeight = originalImage.getHeight()
+                        
+                        def scale = Math.min(maxSize / (double)originalWidth, maxSize / (double)originalHeight)
+                        def newWidth = (int)(originalWidth * scale)
+                        def newHeight = (int)(originalHeight * scale)
+                        
+                        // 创建缩略图
+                        def thumbnail = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB)
+                        def g2d = thumbnail.createGraphics()
+                        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+                        g2d.drawImage(originalImage, 0, 0, newWidth, newHeight, null)
+                        g2d.dispose()
+                        
+                        // 保存缩略图
+                        def thumbnailFileName = "thumb_${assetId}.jpg"
+                        def thumbnailDir = fullPath.getParent().resolve("thumbnails")
+                        Files.createDirectories(thumbnailDir)
+                        def thumbnailFile = thumbnailDir.resolve(thumbnailFileName)
+                        
+                        ImageIO.write(thumbnail, "jpg", thumbnailFile.toFile())
+                        
+                        // 返回相对路径
+                        thumbnailPath = filePath.substring(0, filePath.lastIndexOf('/')) + "/thumbnails/" + thumbnailFileName
+                        
+                        ec.logger.info("Thumbnail generated: ${thumbnailFile}")
+                    }
+                } catch (Exception e) {
+                    ec.logger.warn("Failed to generate thumbnail: ${e.message}")
+                    // 缩略图生成失败不影响主流程
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="extract" noun="FileMetadata" authenticate="anonymous-all">
+        <description>提取文件元数据</description>
+        <in-parameters>
+            <parameter name="filePath" type="String" required="true"/>
+            <parameter name="mimeType" type="String" required="true"/>
+            <parameter name="assetType" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="dimensions" type="Map"/>
+            <parameter name="duration" type="BigDecimal"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import javax.imageio.ImageIO
+                import java.nio.file.*
+                
+                try {
+                    def fullPath = Paths.get(ec.ecfi.runtimePath, filePath)
+                    
+                    if (assetType == 'image') {
+                        def image = ImageIO.read(fullPath.toFile())
+                        if (image != null) {
+                            dimensions = [
+                                width: image.getWidth(),
+                                height: image.getHeight()
+                            ]
+                        }
+                    } else if (assetType == 'audio' || assetType == 'video') {
+                        // 对于音频/视频文件，这里可以集成FFmpeg或其他库来提取元数据
+                        // 暂时返回空值，后续可以扩展
+                        duration = null
+                    }
+                } catch (Exception e) {
+                    ec.logger.warn("Failed to extract metadata: ${e.message}")
+                    // 元数据提取失败不影响主流程
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- ========== Asset Management Services ========== -->
+
+    <service verb="get" noun="AssetsByType" authenticate="anonymous-all">
+        <description>按类型获取素材列表</description>
+        <in-parameters>
+            <parameter name="projectId" type="String" required="true"/>
+            <parameter name="assetType" type="String"/> <!-- image, audio, video, document -->
+            <parameter name="searchTerm" type="String"/>
+            <parameter name="tags" type="List"/>
+            <parameter name="pageIndex" type="Integer" default="0"/>
+            <parameter name="pageSize" type="Integer" default="20"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="assets" type="List"/>
+            <parameter name="totalCount" type="Long"/>
+        </out-parameters>
+        <actions>
+            <entity-find entity-name="novel.anime.Asset" list="assetList">
+                <econdition field-name="projectId"/>
+                <econdition field-name="assetType" from="assetType" ignore-if-empty="true"/>
+                <econditions combine="or" ignore-if-empty="true" ignore="!searchTerm">
+                    <econdition field-name="name" operator="like" value="%${searchTerm}%" ignore-case="true"/>
+                    <econdition field-name="description" operator="like" value="%${searchTerm}%" ignore-case="true"/>
+                </econditions>
+                <order-by field-name="-createdDate"/>
+                <limit-range start="${pageIndex * pageSize}" size="${pageSize}"/>
+            </entity-find>
+
+            <entity-find-count entity-name="novel.anime.Asset" count-field="totalCount">
+                <econdition field-name="projectId"/>
+                <econdition field-name="assetType" from="assetType" ignore-if-empty="true"/>
+                <econditions combine="or" ignore-if-empty="true" ignore="!searchTerm">
+                    <econdition field-name="name" operator="like" value="%${searchTerm}%" ignore-case="true"/>
+                    <econdition field-name="description" operator="like" value="%${searchTerm}%" ignore-case="true"/>
+                </econditions>
+            </entity-find-count>
+
+            <set field="assets" from="[]"/>
+            <iterate list="assetList" entry="asset">
+                <script><![CDATA[
+                    def metadata = asset.metadata ? new groovy.json.JsonSlurper().parseText(asset.metadata) : [:]
+                    
+                    // 标签过滤
+                    def assetTags = metadata.tags ?: []
+                    def matchesTags = !tags || tags.every { tag -> assetTags.contains(tag) }
+                    
+                    if (matchesTags) {
+                        def a = [
+                            assetId: asset.assetId,
+                            type: asset.assetType,
+                            name: asset.name,
+                            description: asset.description,
+                            path: asset.filePath,
+                            size: asset.fileSize,
+                            metadata: metadata,
+                            thumbnailPath: metadata.thumbnailPath,
+                            createdDate: asset.createdDate,
+                            lastUpdatedDate: asset.lastUpdatedDate
+                        ]
+                        assets.add(a)
+                    }
+                ]]></script>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="get" noun="AssetStatistics" authenticate="anonymous-all">
+        <description>获取素材库统计信息</description>
+        <in-parameters>
+            <parameter name="projectId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="statistics" type="Map"/>
+        </out-parameters>
+        <actions>
+            <!-- 总数统计 -->
+            <entity-find-count entity-name="novel.anime.Asset" count-field="totalCount">
+                <econdition field-name="projectId"/>
+            </entity-find-count>
+
+            <!-- 按类型统计 -->
+            <entity-find entity-name="novel.anime.Asset" list="assetList" use-clone="true">
+                <econdition field-name="projectId"/>
+                <select-field field-name="assetType"/>
+                <select-field field-name="fileSize"/>
+            </entity-find>
+
+            <script><![CDATA[
+                def typeStats = [:]
+                def totalSize = 0L
+                
+                assetList.each { asset ->
+                    def type = asset.assetType
+                    if (!typeStats[type]) {
+                        typeStats[type] = [count: 0, size: 0L]
+                    }
+                    typeStats[type].count++
+                    typeStats[type].size += (asset.fileSize ?: 0L)
+                    totalSize += (asset.fileSize ?: 0L)
+                }
+                
+                statistics = [
+                    totalCount: totalCount,
+                    totalSize: totalSize,
+                    typeStatistics: typeStats
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="check" noun="AssetReferences" authenticate="anonymous-all">
+        <description>检查素材引用情况</description>
+        <in-parameters>
+            <parameter name="assetId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="references" type="List"/>
+            <parameter name="canDelete" type="Boolean"/>
+        </out-parameters>
+        <actions>
+            <set field="references" from="[]"/>
+            <set field="canDelete" value="true"/>
+
+            <!-- 检查工作流中的引用 -->
+            <entity-find entity-name="novel.anime.Workflow" list="workflowList">
+                <econdition field-name="nodesJson" operator="like" value="%${assetId}%"/>
+            </entity-find>
+
+            <iterate list="workflowList" entry="workflow">
+                <set field="references" from="references + [[
+                    type: 'workflow',
+                    id: workflow.workflowId,
+                    name: workflow.name
+                ]]"/>
+                <set field="canDelete" value="false"/>
+            </iterate>
+
+            <!-- 可以扩展检查其他引用，如场景、角色等 -->
+        </actions>
+    </service>
+
+    <service verb="delete" noun="AssetWithFile" authenticate="anonymous-all">
+        <description>删除素材及其文件</description>
+        <in-parameters>
+            <parameter name="assetId" type="String" required="true"/>
+            <parameter name="forceDelete" type="Boolean" default="false"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <!-- 检查引用 -->
+            <service-call name="novel.anime.AssetServices.check#AssetReferences" in-map="[assetId: assetId]" out-map="refResult"/>
+            
+            <if condition="!refResult.canDelete &amp;&amp; !forceDelete">
+                <set field="success" value="false"/>
+                <set field="message" value="素材正在被使用，无法删除"/>
+                <return/>
+            </if>
+
+            <!-- 获取素材信息 -->
+            <entity-find-one entity-name="novel.anime.Asset" value-field="asset">
+                <field-map field-name="assetId"/>
+            </entity-find-one>
+
+            <if condition="asset">
+                <!-- 删除文件 -->
+                <script><![CDATA[
+                    import java.nio.file.*
+                    
+                    try {
+                        if (asset.filePath) {
+                            def fullPath = Paths.get(ec.ecfi.runtimePath, asset.filePath)
+                            if (Files.exists(fullPath)) {
+                                Files.delete(fullPath)
+                                ec.logger.info("Deleted asset file: ${fullPath}")
+                            }
+                            
+                            // 删除缩略图
+                            def metadata = asset.metadata ? new groovy.json.JsonSlurper().parseText(asset.metadata) : [:]
+                            if (metadata.thumbnailPath) {
+                                def thumbPath = Paths.get(ec.ecfi.runtimePath, metadata.thumbnailPath)
+                                if (Files.exists(thumbPath)) {
+                                    Files.delete(thumbPath)
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        ec.logger.warn("Failed to delete asset file: ${e.message}")
+                    }
+                ]]></script>
+
+                <!-- 删除数据库记录 -->
+                <service-call name="novel.anime.AssetServices.delete#Asset" in-map="[assetId: assetId]"/>
+                
+                <set field="success" value="true"/>
+                <set field="message" value="素材删除成功"/>
+            <else>
+                <set field="success" value="false"/>
+                <set field="message" value="素材不存在"/>
+            </else>
+            </if>
+        </actions>
+    </service>
+
+</services>

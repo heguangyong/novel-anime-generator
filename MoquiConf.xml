@@ -56,18 +56,7 @@
         </webapp>
     </webapp-list>
 
-    <!-- Service configuration -->
-    <service-facade>
-        <service-location name="novel.anime.NovelAnimeServices" location="component://novel-anime-generator/service/NovelAnimeServices.xml"/>
-        <service-location name="novel.anime.NovelAnimeRestServices" location="component://novel-anime-generator/service/NovelAnimeRestServices.xml"/>
-        <service-location name="novel.anime.NovelAnimeAuthServices" location="component://novel-anime-generator/service/NovelAnimeAuthServices.xml"/>
-        <service-location name="novel.anime.NovelAnimeCreditsServices" location="component://novel-anime-generator/service/NovelAnimeCreditsServices.xml"/>
-        <service-location name="novel.anime.NovelAnimePipelineServices" location="component://novel-anime-generator/service/NovelAnimePipelineServices.xml"/>
-        <service-location name="novel.anime.NovelAnimeAIServices" location="component://novel-anime-generator/service/NovelAnimeAIServices.xml"/>
-        <service-location name="novel.anime.NovelAnimeCharacterServices" location="component://novel-anime-generator/service/NovelAnimeCharacterServices.xml"/>
-        <service-location name="novel.anime.NovelAnimeSceneServices" location="component://novel-anime-generator/service/NovelAnimeSceneServices.xml"/>
-        <service-location name="novel.anime.NovelAnimeEpisodeServices" location="component://novel-anime-generator/service/NovelAnimeEpisodeServices.xml"/>
-    </service-facade>
+    <!-- Service configuration removed - services are included via component.xml -->
 
     <!-- Screen configuration -->
     <screen-facade>

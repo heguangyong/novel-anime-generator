@@ -178,7 +178,7 @@
     </service>
 
     <service verb="analyze" noun="Scenes" authenticate="anonymous-all">
-        <description>Analyze chapter content and create scene entities</description>
+        <description>Analyze chapter content and create scene entities using Zhipu AI</description>
         <in-parameters>
             <parameter name="chapterId" type="String" required="true"/>
             <parameter name="content" type="String" required="true"/>
@@ -189,81 +189,227 @@
         </out-parameters>
         <actions>
             <script><![CDATA[
-                // Simple scene detection logic (in production, would use Zhipu AI)
+                import groovy.json.JsonSlurper
+                import groovy.json.JsonOutput
+                import java.net.URL
+                import java.net.HttpURLConnection
+                
                 def content = context.content
                 def scenes = []
+                def useAI = true
                 
-                // Split by common scene break indicators
-                def sceneBreaks = [
-                    /\n\s*\n\s*\n/,  // Multiple line breaks
-                    /\*\s*\*\s*\*/,   // Asterisk separators
-                    /---+/,           // Dash separators
-                    /第[一二三四五六七八九十\d]+节/,  // Section markers
-                ]
+                // 获取 AI 配置 - 使用 Moqui 的配置系统
+                def aiApiBase = ec.factory.getToolFactory().getSystemProperty("marketplace.ai.api.base") ?: "https://open.bigmodel.cn/api/paas/v4"
+                def aiApiKey = ec.factory.getToolFactory().getSystemProperty("marketplace.ai.api.key") ?: "7b547bec7286432186eb77a477e10c33.XtHQWZS5PoGKAkg0"
+                def aiModel = ec.factory.getToolFactory().getSystemProperty("marketplace.ai.model") ?: "glm-4-plus"
                 
-                def parts = [content] // Start with full content
+                ec.logger.info("🤖 开始使用智谱 AI 分析场景, 章节ID: ${context.chapterId}")
                 
-                // Try to split by scene breaks
-                for (pattern in sceneBreaks) {
-                    def newParts = []
-                    for (part in parts) {
-                        def splitParts = part.split(pattern)
-                        newParts.addAll(splitParts)
-                    }
-                    if (newParts.size() > parts.size()) {
-                        parts = newParts
-                        break
+                if (useAI && aiApiKey && content.length() > 100) {
+                    try {
+                        // 构建智谱 AI 请求
+                        def prompt = """请分析以下小说章节内容，将其分割成多个场景。每个场景应该是一个相对独立的叙事单元。
+
+请以 JSON 格式返回场景列表，格式如下：
+{
+  "scenes": [
+    {
+      "title": "场景标题（简短描述）",
+      "setting": "场景地点/环境",
+      "mood": "场景氛围（如：紧张、温馨、悲伤、快乐等）",
+      "characters": ["出现的角色名"],
+      "summary": "场景简要描述（50字以内）",
+      "startMarker": "场景开始的标志性文字（用于定位）"
+    }
+  ]
+}
+
+章节内容：
+${content.length() > 3000 ? content.substring(0, 3000) + "..." : content}
+
+请只返回 JSON，不要有其他文字。"""
+
+                        def requestBody = [
+                            model: aiModel,
+                            messages: [
+                                [role: "user", content: prompt]
+                            ],
+                            temperature: 0.7,
+                            max_tokens: 2000
+                        ]
+                        
+                        def url = new URL("${aiApiBase}/chat/completions")
+                        def connection = (HttpURLConnection) url.openConnection()
+                        connection.setRequestMethod("POST")
+                        connection.setRequestProperty("Content-Type", "application/json")
+                        connection.setRequestProperty("Authorization", "Bearer ${aiApiKey}")
+                        connection.setDoOutput(true)
+                        connection.setConnectTimeout(30000)
+                        connection.setReadTimeout(60000)
+                        
+                        def outputStream = connection.getOutputStream()
+                        outputStream.write(JsonOutput.toJson(requestBody).getBytes("UTF-8"))
+                        outputStream.close()
+                        
+                        def responseCode = connection.getResponseCode()
+                        ec.logger.info("🤖 智谱 AI 响应码: ${responseCode}")
+                        
+                        if (responseCode == 200) {
+                            def inputStream = connection.getInputStream()
+                            def response = new JsonSlurper().parse(inputStream)
+                            inputStream.close()
+                            
+                            def aiContent = response.choices[0]?.message?.content
+                            ec.logger.info("🤖 智谱 AI 返回内容长度: ${aiContent?.length()}")
+                            
+                            if (aiContent) {
+                                // 提取 JSON 部分
+                                def jsonMatch = aiContent =~ /\{[\s\S]*\}/
+                                if (jsonMatch.find()) {
+                                    def jsonStr = jsonMatch[0]
+                                    def aiResult = new JsonSlurper().parseText(jsonStr)
+                                    
+                                    if (aiResult.scenes && aiResult.scenes.size() > 0) {
+                                        ec.logger.info("🤖 AI 识别到 ${aiResult.scenes.size()} 个场景")
+                                        
+                                        // 根据 AI 分析结果分割内容
+                                        def sceneNumber = 1
+                                        for (aiScene in aiResult.scenes) {
+                                            // 尝试根据 startMarker 定位场景内容
+                                            def sceneContent = ""
+                                            if (aiScene.startMarker && content.contains(aiScene.startMarker)) {
+                                                def startIdx = content.indexOf(aiScene.startMarker)
+                                                def endIdx = content.length()
+                                                
+                                                // 查找下一个场景的开始位置
+                                                def nextSceneIdx = aiResult.scenes.indexOf(aiScene) + 1
+                                                if (nextSceneIdx < aiResult.scenes.size()) {
+                                                    def nextMarker = aiResult.scenes[nextSceneIdx].startMarker
+                                                    if (nextMarker && content.indexOf(nextMarker, startIdx + 1) > 0) {
+                                                        endIdx = content.indexOf(nextMarker, startIdx + 1)
+                                                    }
+                                                }
+                                                sceneContent = content.substring(startIdx, endIdx).trim()
+                                            }
+                                            
+                                            // 如果无法定位，使用摘要作为内容
+                                            if (!sceneContent || sceneContent.length() < 50) {
+                                                sceneContent = aiScene.summary ?: "场景内容"
+                                            }
+                                            
+                                            scenes.add([
+                                                number: sceneNumber++,
+                                                content: sceneContent,
+                                                title: aiScene.title ?: "场景${sceneNumber}",
+                                                setting: aiScene.setting ?: "未知场景",
+                                                mood: aiScene.mood ?: "中性",
+                                                characters: aiScene.characters ?: []
+                                            ])
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            ec.logger.warn("🤖 智谱 AI 请求失败: HTTP ${responseCode}")
+                        }
+                        
+                        connection.disconnect()
+                        
+                    } catch (Exception e) {
+                        ec.logger.error("🤖 智谱 AI 调用失败: ${e.message}", e)
                     }
                 }
                 
-                // Create scenes from parts
-                def sceneNumber = 1
-                for (part in parts) {
-                    def sceneContent = part.trim()
-                    if (sceneContent.length() > 100) { // Minimum scene length
-                        // Extract basic setting and mood (simplified)
-                        def setting = "未知场景"
-                        def mood = "中性"
-                        
-                        // Simple keyword detection for setting
-                        if (sceneContent.contains("房间") || sceneContent.contains("屋子")) {
-                            setting = "室内"
-                        } else if (sceneContent.contains("森林") || sceneContent.contains("山") || sceneContent.contains("河")) {
-                            setting = "户外"
-                        } else if (sceneContent.contains("城市") || sceneContent.contains("街道")) {
-                            setting = "城市"
+                // 如果 AI 分析失败或没有结果，使用本地分析
+                if (scenes.isEmpty()) {
+                    ec.logger.info("📝 使用本地规则分析场景...")
+                    
+                    // Split by common scene break indicators
+                    def sceneBreaks = [
+                        /\n\s*\n\s*\n/,  // Multiple line breaks
+                        /\*\s*\*\s*\*/,   // Asterisk separators
+                        /---+/,           // Dash separators
+                        /第[一二三四五六七八九十\d]+节/,  // Section markers
+                    ]
+                    
+                    def parts = [content] // Start with full content
+                    
+                    // Try to split by scene breaks
+                    for (pattern in sceneBreaks) {
+                        def newParts = []
+                        for (part in parts) {
+                            def splitParts = part.split(pattern)
+                            newParts.addAll(splitParts)
                         }
-                        
-                        // Simple mood detection
-                        if (sceneContent.contains("愤怒") || sceneContent.contains("生气")) {
-                            mood = "愤怒"
-                        } else if (sceneContent.contains("悲伤") || sceneContent.contains("哭")) {
-                            mood = "悲伤"
-                        } else if (sceneContent.contains("快乐") || sceneContent.contains("笑")) {
-                            mood = "快乐"
-                        } else if (sceneContent.contains("紧张") || sceneContent.contains("危险")) {
-                            mood = "紧张"
+                        if (newParts.size() > parts.size()) {
+                            parts = newParts
+                            break
                         }
-                        
+                    }
+                    
+                    // Create scenes from parts
+                    def sceneNumber = 1
+                    for (part in parts) {
+                        def sceneContent = part.trim()
+                        if (sceneContent.length() > 100) { // Minimum scene length
+                            // Extract basic setting and mood (simplified)
+                            def setting = "未知场景"
+                            def mood = "中性"
+                            
+                            // Simple keyword detection for setting
+                            if (sceneContent.contains("房间") || sceneContent.contains("屋子")) {
+                                setting = "室内"
+                            } else if (sceneContent.contains("森林") || sceneContent.contains("山") || sceneContent.contains("河")) {
+                                setting = "户外"
+                            } else if (sceneContent.contains("城市") || sceneContent.contains("街道")) {
+                                setting = "城市"
+                            }
+                            
+                            // Simple mood detection
+                            if (sceneContent.contains("愤怒") || sceneContent.contains("生气")) {
+                                mood = "愤怒"
+                            } else if (sceneContent.contains("悲伤") || sceneContent.contains("哭")) {
+                                mood = "悲伤"
+                            } else if (sceneContent.contains("快乐") || sceneContent.contains("笑")) {
+                                mood = "快乐"
+                            } else if (sceneContent.contains("紧张") || sceneContent.contains("危险")) {
+                                mood = "紧张"
+                            }
+                            
+                            // 生成场景标题
+                            def title = "场景${sceneNumber}"
+                            def firstLine = sceneContent.split("\n")[0]?.trim() ?: ""
+                            if (firstLine.length() > 0 && firstLine.length() < 30 && !firstLine.contains('"') && !firstLine.contains('「')) {
+                                title = firstLine
+                            } else if (setting != "未知场景") {
+                                title = setting
+                            }
+                            
+                            scenes.add([
+                                number: sceneNumber++,
+                                content: sceneContent,
+                                title: title,
+                                setting: setting,
+                                mood: mood,
+                                characters: []
+                            ])
+                        }
+                    }
+                    
+                    // Ensure at least one scene
+                    if (scenes.isEmpty()) {
                         scenes.add([
-                            number: sceneNumber++,
-                            content: sceneContent,
-                            setting: setting,
-                            mood: mood
+                            number: 1,
+                            content: content,
+                            title: "完整章节",
+                            setting: "未知场景",
+                            mood: "中性",
+                            characters: []
                         ])
                     }
                 }
                 
-                // Ensure at least one scene
-                if (scenes.isEmpty()) {
-                    scenes.add([
-                        number: 1,
-                        content: content,
-                        setting: "未知场景",
-                        mood: "中性"
-                    ])
-                }
-                
+                ec.logger.info("📝 最终生成 ${scenes.size()} 个场景")
                 context.detectedScenes = scenes
             ]]></script>
             
@@ -274,6 +420,7 @@
                     <field-map field-name="chapterId" from="chapterId"/>
                     <field-map field-name="sceneNumber" from="sceneData.number"/>
                     <field-map field-name="content" from="sceneData.content"/>
+                    <field-map field-name="title" from="sceneData.title"/>
                     <field-map field-name="setting" from="sceneData.setting"/>
                     <field-map field-name="mood" from="sceneData.mood"/>
                     <field-map field-name="analysisStatus" value="analyzed"/>
@@ -635,6 +782,7 @@
                 sceneId: it.sceneId,
                 chapterId: it.chapterId,
                 sceneNumber: it.sceneNumber,
+                title: it.title,
                 setting: it.setting,
                 mood: it.mood
             ] }"/>
@@ -796,6 +944,340 @@
                     context.success = false
                     context.message = "测试失败: " + e.message
                 }
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Dialogue Extraction Services -->
+    <service verb="extract" noun="Dialogues" authenticate="anonymous-all">
+        <description>Extract dialogues from scene content using AI analysis</description>
+        <in-parameters>
+            <parameter name="sceneId" type="String" required="true"/>
+            <parameter name="content" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="dialogues" type="List"/>
+            <parameter name="dialogueCount" type="Integer"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import groovy.json.JsonSlurper
+                import groovy.json.JsonOutput
+                import java.net.URL
+                import java.net.HttpURLConnection
+                
+                def content = context.content
+                def dialogues = []
+                def useAI = true
+                
+                // 获取 AI 配置
+                def aiApiBase = ec.factory.getToolFactory().getSystemProperty("marketplace.ai.api.base") ?: "https://open.bigmodel.cn/api/paas/v4"
+                def aiApiKey = ec.factory.getToolFactory().getSystemProperty("marketplace.ai.api.key") ?: "7b547bec7286432186eb77a477e10c33.XtHQWZS5PoGKAkg0"
+                def aiModel = ec.factory.getToolFactory().getSystemProperty("marketplace.ai.model") ?: "glm-4-plus"
+                
+                ec.logger.info("💬 开始提取对话, 场景ID: ${context.sceneId}")
+                
+                if (useAI && aiApiKey && content.length() > 50) {
+                    try {
+                        // 构建智谱 AI 请求
+                        def prompt = """请从以下场景内容中提取所有对话。
+
+请以 JSON 格式返回对话列表，格式如下：
+{
+  "dialogues": [
+    {
+      "speaker": "说话者名称",
+      "text": "对话内容",
+      "emotion": "情绪（如：高兴、愤怒、悲伤、平静等）",
+      "context": "对话发生的简短上下文"
+    }
+  ]
+}
+
+场景内容：
+${content.length() > 2000 ? content.substring(0, 2000) + "..." : content}
+
+请只返回 JSON，不要有其他文字。"""
+
+                        def requestBody = [
+                            model: aiModel,
+                            messages: [
+                                [role: "user", content: prompt]
+                            ],
+                            temperature: 0.7,
+                            max_tokens: 2000
+                        ]
+                        
+                        def url = new URL("${aiApiBase}/chat/completions")
+                        def connection = (HttpURLConnection) url.openConnection()
+                        connection.setRequestMethod("POST")
+                        connection.setRequestProperty("Content-Type", "application/json")
+                        connection.setRequestProperty("Authorization", "Bearer ${aiApiKey}")
+                        connection.setDoOutput(true)
+                        connection.setConnectTimeout(30000)
+                        connection.setReadTimeout(60000)
+                        
+                        def outputStream = connection.getOutputStream()
+                        outputStream.write(JsonOutput.toJson(requestBody).getBytes("UTF-8"))
+                        outputStream.close()
+                        
+                        def responseCode = connection.getResponseCode()
+                        ec.logger.info("💬 智谱 AI 响应码: ${responseCode}")
+                        
+                        if (responseCode == 200) {
+                            def inputStream = connection.getInputStream()
+                            def response = new JsonSlurper().parse(inputStream)
+                            inputStream.close()
+                            
+                            def aiContent = response.choices[0]?.message?.content
+                            
+                            if (aiContent) {
+                                // 提取 JSON 部分
+                                def jsonMatch = aiContent =~ /\{[\s\S]*\}/
+                                if (jsonMatch.find()) {
+                                    def jsonStr = jsonMatch[0]
+                                    def aiResult = new JsonSlurper().parseText(jsonStr)
+                                    
+                                    if (aiResult.dialogues && aiResult.dialogues.size() > 0) {
+                                        ec.logger.info("💬 AI 识别到 ${aiResult.dialogues.size()} 条对话")
+                                        dialogues = aiResult.dialogues
+                                    }
+                                }
+                            }
+                        }
+                        
+                        connection.disconnect()
+                        
+                    } catch (Exception e) {
+                        ec.logger.error("💬 智谱 AI 调用失败: ${e.message}", e)
+                    }
+                }
+                
+                // 如果 AI 分析失败，使用本地规则提取
+                if (dialogues.isEmpty()) {
+                    ec.logger.info("💬 使用本地规则提取对话...")
+                    
+                    // 对话标记模式
+                    def dialoguePatterns = [
+                        /"([^"]+)"/,           // 双引号
+                        /"([^"]+)"/,           // 中文双引号
+                        /'([^']+)'/,           // 单引号
+                        /'([^']+)'/,           // 中文单引号
+                        /「([^」]+)」/,         // 日式引号
+                        /『([^』]+)』/          // 日式书名号
+                    ]
+                    
+                    def lines = content.split('\n')
+                    def dialogueNumber = 1
+                    
+                    for (line in lines) {
+                        line = line.trim()
+                        if (line.length() < 5) continue
+                        
+                        for (pattern in dialoguePatterns) {
+                            def matcher = line =~ pattern
+                            while (matcher.find()) {
+                                def dialogueText = matcher.group(1).trim()
+                                if (dialogueText.length() > 2) {
+                                    // 尝试识别说话者
+                                    def speaker = "未知"
+                                    def speakerMatch = line =~ /([^：:，,。.！!？?]+)[：:]/
+                                    if (speakerMatch.find()) {
+                                        speaker = speakerMatch.group(1).trim()
+                                    }
+                                    
+                                    // 简单情绪检测
+                                    def emotion = "平静"
+                                    if (dialogueText.contains("！") || dialogueText.contains("!")) {
+                                        emotion = "激动"
+                                    } else if (dialogueText.contains("？") || dialogueText.contains("?")) {
+                                        emotion = "疑惑"
+                                    } else if (dialogueText.contains("...") || dialogueText.contains("…")) {
+                                        emotion = "犹豫"
+                                    }
+                                    
+                                    dialogues.add([
+                                        speaker: speaker,
+                                        text: dialogueText,
+                                        emotion: emotion,
+                                        context: line.length() > 50 ? line.substring(0, 50) + "..." : line
+                                    ])
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                ec.logger.info("💬 最终提取 ${dialogues.size()} 条对话")
+                context.dialogues = dialogues
+                context.dialogueCount = dialogues.size()
+                context.success = true
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Emotion Analysis Services -->
+    <service verb="analyze" noun="Emotion" authenticate="anonymous-all">
+        <description>Analyze emotional tone of scene or dialogue using AI</description>
+        <in-parameters>
+            <parameter name="content" type="String" required="true"/>
+            <parameter name="contentType" type="String" default-value="scene"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="primaryEmotion" type="String"/>
+            <parameter name="emotionScore" type="BigDecimal"/>
+            <parameter name="emotionDetails" type="Map"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import groovy.json.JsonSlurper
+                import groovy.json.JsonOutput
+                import java.net.URL
+                import java.net.HttpURLConnection
+                
+                def content = context.content
+                def useAI = true
+                
+                // 获取 AI 配置
+                def aiApiBase = ec.factory.getToolFactory().getSystemProperty("marketplace.ai.api.base") ?: "https://open.bigmodel.cn/api/paas/v4"
+                def aiApiKey = ec.factory.getToolFactory().getSystemProperty("marketplace.ai.api.key") ?: "7b547bec7286432186eb77a477e10c33.XtHQWZS5PoGKAkg0"
+                def aiModel = ec.factory.getToolFactory().getSystemProperty("marketplace.ai.model") ?: "glm-4-plus"
+                
+                ec.logger.info("😊 开始情感分析, 内容类型: ${context.contentType}")
+                
+                def primaryEmotion = "中性"
+                def emotionScore = 0.5
+                def emotionDetails = [:]
+                
+                if (useAI && aiApiKey && content.length() > 20) {
+                    try {
+                        // 构建智谱 AI 请求
+                        def prompt = """请分析以下内容的情感基调。
+
+请以 JSON 格式返回分析结果，格式如下：
+{
+  "primaryEmotion": "主要情绪（如：快乐、悲伤、愤怒、恐惧、惊讶、厌恶、中性）",
+  "emotionScore": 0.8,
+  "emotionDetails": {
+    "joy": 0.1,
+    "sadness": 0.2,
+    "anger": 0.1,
+    "fear": 0.1,
+    "surprise": 0.1,
+    "disgust": 0.0,
+    "neutral": 0.4
+  },
+  "reasoning": "简短说明为什么是这种情绪"
+}
+
+内容：
+${content.length() > 1000 ? content.substring(0, 1000) + "..." : content}
+
+请只返回 JSON，不要有其他文字。"""
+
+                        def requestBody = [
+                            model: aiModel,
+                            messages: [
+                                [role: "user", content: prompt]
+                            ],
+                            temperature: 0.7,
+                            max_tokens: 1000
+                        ]
+                        
+                        def url = new URL("${aiApiBase}/chat/completions")
+                        def connection = (HttpURLConnection) url.openConnection()
+                        connection.setRequestMethod("POST")
+                        connection.setRequestProperty("Content-Type", "application/json")
+                        connection.setRequestProperty("Authorization", "Bearer ${aiApiKey}")
+                        connection.setDoOutput(true)
+                        connection.setConnectTimeout(30000)
+                        connection.setReadTimeout(60000)
+                        
+                        def outputStream = connection.getOutputStream()
+                        outputStream.write(JsonOutput.toJson(requestBody).getBytes("UTF-8"))
+                        outputStream.close()
+                        
+                        def responseCode = connection.getResponseCode()
+                        ec.logger.info("😊 智谱 AI 响应码: ${responseCode}")
+                        
+                        if (responseCode == 200) {
+                            def inputStream = connection.getInputStream()
+                            def response = new JsonSlurper().parse(inputStream)
+                            inputStream.close()
+                            
+                            def aiContent = response.choices[0]?.message?.content
+                            
+                            if (aiContent) {
+                                // 提取 JSON 部分
+                                def jsonMatch = aiContent =~ /\{[\s\S]*\}/
+                                if (jsonMatch.find()) {
+                                    def jsonStr = jsonMatch[0]
+                                    def aiResult = new JsonSlurper().parseText(jsonStr)
+                                    
+                                    if (aiResult.primaryEmotion) {
+                                        primaryEmotion = aiResult.primaryEmotion
+                                        emotionScore = aiResult.emotionScore ?: 0.5
+                                        emotionDetails = aiResult.emotionDetails ?: [:]
+                                        ec.logger.info("😊 AI 识别情绪: ${primaryEmotion} (${emotionScore})")
+                                    }
+                                }
+                            }
+                        }
+                        
+                        connection.disconnect()
+                        
+                    } catch (Exception e) {
+                        ec.logger.error("😊 智谱 AI 调用失败: ${e.message}", e)
+                    }
+                }
+                
+                // 如果 AI 分析失败，使用本地规则
+                if (primaryEmotion == "中性" && emotionScore == 0.5) {
+                    ec.logger.info("😊 使用本地规则分析情感...")
+                    
+                    def contentLower = content.toLowerCase()
+                    
+                    // 情感关键词
+                    def emotionKeywords = [
+                        joy: ["快乐", "高兴", "开心", "欢乐", "喜悦", "笑", "兴奋"],
+                        sadness: ["悲伤", "难过", "伤心", "哭", "痛苦", "失落", "沮丧"],
+                        anger: ["愤怒", "生气", "恼火", "暴怒", "愤恨", "怒"],
+                        fear: ["恐惧", "害怕", "惊恐", "畏惧", "担心", "焦虑"],
+                        surprise: ["惊讶", "吃惊", "震惊", "意外", "惊奇"],
+                        disgust: ["厌恶", "恶心", "讨厌", "憎恨"]
+                    ]
+                    
+                    def scores = [:]
+                    emotionKeywords.each { emotion, keywords ->
+                        def count = 0
+                        keywords.each { keyword ->
+                            count += (content =~ keyword).size()
+                        }
+                        scores[emotion] = count
+                    }
+                    
+                    // 找出最高分的情绪
+                    def maxEmotion = scores.max { it.value }
+                    if (maxEmotion && maxEmotion.value > 0) {
+                        primaryEmotion = maxEmotion.key
+                        emotionScore = Math.min(1.0, maxEmotion.value / 5.0)
+                    }
+                    
+                    // 归一化分数
+                    def total = scores.values().sum() ?: 1
+                    emotionDetails = scores.collectEntries { k, v ->
+                        [(k): v / total]
+                    }
+                    emotionDetails.neutral = 1.0 - emotionDetails.values().sum()
+                }
+                
+                ec.logger.info("😊 情感分析完成: ${primaryEmotion} (${emotionScore})")
+                context.primaryEmotion = primaryEmotion
+                context.emotionScore = emotionScore
+                context.emotionDetails = emotionDetails
+                context.success = true
             ]]></script>
         </actions>
     </service>

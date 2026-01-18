@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- ========== User Settings Services ========== -->
+
+    <service verb="get" noun="UserSettings">
+        <description>获取用户设置</description>
+        <in-parameters>
+            <parameter name="userId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="settings" type="Map"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.user.UserSettings" value-field="userSettings">
+                <field-map field-name="userId"/>
+            </entity-find-one>
+            <if condition="userSettings">
+                <set field="settings" from="[
+                    userId: userSettings.userId,
+                    theme: userSettings.theme ?: 'system',
+                    language: userSettings.language ?: 'zh-CN',
+                    notifications: [
+                        email: userSettings.notificationEmail == 'Y',
+                        push: userSettings.notificationPush == 'Y'
+                    ],
+                    defaultWorkflowTemplate: userSettings.defaultWorkflowTemplate,
+                    autoSave: userSettings.autoSave == 'Y',
+                    createdDate: userSettings.createdDate,
+                    lastUpdatedDate: userSettings.lastUpdatedDate
+                ]"/>
+                <else>
+                    <!-- 返回默认设置 -->
+                    <set field="settings" from="[
+                        userId: userId,
+                        theme: 'system',
+                        language: 'zh-CN',
+                        notifications: [
+                            email: true,
+                            push: true
+                        ],
+                        defaultWorkflowTemplate: null,
+                        autoSave: true
+                    ]"/>
+                </else>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="update" noun="UserSettings">
+        <description>更新用户设置</description>
+        <in-parameters>
+            <parameter name="userId" type="String" required="true"/>
+            <parameter name="theme" type="String"/>
+            <parameter name="language" type="String"/>
+            <parameter name="notifications" type="Map"/>
+            <parameter name="defaultWorkflowTemplate" type="String"/>
+            <parameter name="autoSave" type="Boolean"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="settings" type="Map"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.user.UserSettings" value-field="userSettings">
+                <field-map field-name="userId"/>
+            </entity-find-one>
+            
+            <if condition="userSettings">
+                <!-- 更新现有设置 -->
+                <set field="updateMap" from="[lastUpdatedDate: ec.user.nowTimestamp]"/>
+                <if condition="theme"><set field="updateMap.theme" from="theme"/></if>
+                <if condition="language"><set field="updateMap.language" from="language"/></if>
+                <if condition="notifications?.email != null">
+                    <set field="updateMap.notificationEmail" from="notifications.email ? 'Y' : 'N'"/>
+                </if>
+                <if condition="notifications?.push != null">
+                    <set field="updateMap.notificationPush" from="notifications.push ? 'Y' : 'N'"/>
+                </if>
+                <if condition="defaultWorkflowTemplate != null">
+                    <set field="updateMap.defaultWorkflowTemplate" from="defaultWorkflowTemplate"/>
+                </if>
+                <if condition="autoSave != null">
+                    <set field="updateMap.autoSave" from="autoSave ? 'Y' : 'N'"/>
+                </if>
+                <service-call name="update#novel.anime.user.UserSettings" in-map="updateMap + [userId: userId]"/>
+                <else>
+                    <!-- 创建新设置 -->
+                    <service-call name="create#novel.anime.user.UserSettings" in-map="[
+                        userId: userId,
+                        theme: theme ?: 'system',
+                        language: language ?: 'zh-CN',
+                        notificationEmail: notifications?.email != false ? 'Y' : 'N',
+                        notificationPush: notifications?.push != false ? 'Y' : 'N',
+                        defaultWorkflowTemplate: defaultWorkflowTemplate,
+                        autoSave: autoSave != false ? 'Y' : 'N',
+                        createdDate: ec.user.nowTimestamp,
+                        lastUpdatedDate: ec.user.nowTimestamp
+                    ]"/>
+                </else>
+            </if>
+            
+            <!-- 返回更新后的设置 -->
+            <service-call name="NovelAnimeUserSettingsServices.get#UserSettings" in-map="[userId: userId]" out-map="context"/>
+        </actions>
+    </service>
+
+</services>

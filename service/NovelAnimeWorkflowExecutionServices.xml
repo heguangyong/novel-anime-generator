@@ -1,0 +1,749 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- ========== Workflow Execution Engine Services ========== -->
+    
+    <service verb="execute" noun="Workflow" authenticate="anonymous-all">
+        <description>执行工作流</description>
+        <in-parameters>
+            <parameter name="workflowId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="executionId" type="String"/>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <!-- 加载工作流 -->
+            <service-call name="NovelAnimeWorkflowServices.get#Workflow" out-map="workflowResult">
+                <field-map field-name="workflowId" from="workflowId"/>
+            </service-call>
+            
+            <if condition="!workflowResult.workflow">
+                <return error="true" message="工作流不存在"/>
+            </if>
+            
+            <set field="workflow" from="workflowResult.workflow"/>
+            
+            <!-- 验证工作流 -->
+            <service-call name="NovelAnimeWorkflowExecutionServices.validate#Workflow" out-map="validationResult">
+                <field-map field-name="workflow" from="workflow"/>
+            </service-call>
+            
+            <if condition="!validationResult.valid">
+                <return error="true" message="工作流验证失败: ${validationResult.errors.join(', ')}"/>
+            </if>
+            
+            <!-- 创建执行记录 -->
+            <service-call name="NovelAnimeWorkflowServices.create#WorkflowExecution" out-map="execResult">
+                <field-map field-name="workflowId" from="workflowId"/>
+                <field-map field-name="workflowName" from="workflow.name"/>
+                <field-map field-name="status" value="running"/>
+                <field-map field-name="nodeCount" from="workflow.nodes?.size() ?: 0"/>
+                <field-map field-name="logs" from="[]"/>
+            </service-call>
+            
+            <set field="executionId" from="execResult.executionId"/>
+            
+            <!-- 拓扑排序获取执行顺序 -->
+            <service-call name="NovelAnimeWorkflowExecutionServices.topological#Sort" out-map="sortResult">
+                <field-map field-name="workflow" from="workflow"/>
+            </service-call>
+            
+            <if condition="!sortResult.success">
+                <service-call name="NovelAnimeWorkflowServices.update#WorkflowExecution">
+                    <field-map field-name="executionId" from="executionId"/>
+                    <field-map field-name="status" value="failed"/>
+                    <field-map field-name="endTime" from="ec.user.nowTimestamp"/>
+                    <field-map field-name="logs" from="[[
+                        timestamp: ec.user.nowTimestamp,
+                        level: 'error',
+                        message: sortResult.message
+                    ]]"/>
+                </service-call>
+                <return error="true" message="${sortResult.message}"/>
+            </if>
+            
+            <!-- 初始化执行上下文 -->
+            <script><![CDATA[
+                def executionContext = [
+                    executionId: executionId,
+                    workflowId: workflowId,
+                    workflow: workflow,
+                    executionOrder: sortResult.executionOrder,
+                    nodeStates: [:],
+                    nodeOutputs: [:],
+                    logs: [],
+                    startTime: ec.user.nowTimestamp
+                ]
+                
+                // 初始化所有节点状态为pending
+                workflow.nodes.each { node ->
+                    executionContext.nodeStates[node.id] = [
+                        nodeId: node.id,
+                        status: 'pending',
+                        retryCount: 0
+                    ]
+                }
+                
+                context.executionContext = executionContext
+            ]]></script>
+            
+            <!-- 按顺序执行节点 -->
+            <iterate list="sortResult.executionOrder" entry="nodeId">
+                <service-call name="NovelAnimeWorkflowExecutionServices.execute#Node" out-map="nodeResult">
+                    <field-map field-name="executionContext" from="executionContext"/>
+                    <field-map field-name="nodeId" from="nodeId"/>
+                </service-call>
+                
+                <if condition="!nodeResult.success">
+                    <!-- 节点执行失败 -->
+                    <script><![CDATA[
+                        executionContext.logs.add([
+                            timestamp: ec.user.nowTimestamp,
+                            level: 'error',
+                            nodeId: nodeId,
+                            message: "节点执行失败: ${nodeResult.message}"
+                        ])
+                    ]]></script>
+                    
+                    <!-- 更新执行记录为失败 -->
+                    <service-call name="NovelAnimeWorkflowServices.update#WorkflowExecution">
+                        <field-map field-name="executionId" from="executionId"/>
+                        <field-map field-name="status" value="failed"/>
+                        <field-map field-name="endTime" from="ec.user.nowTimestamp"/>
+                        <field-map field-name="logs" from="executionContext.logs"/>
+                    </service-call>
+                    
+                    <set field="success" from="false"/>
+                    <set field="message" value="工作流执行失败: ${nodeResult.message}"/>
+                    <return/>
+                </if>
+            </iterate>
+            
+            <!-- 计算执行时长 -->
+            <script><![CDATA[
+                def duration = (ec.user.nowTimestamp.time - executionContext.startTime.time) / 1000
+                context.duration = duration as Integer
+            ]]></script>
+            
+            <!-- 更新执行记录为完成 -->
+            <service-call name="NovelAnimeWorkflowServices.update#WorkflowExecution">
+                <field-map field-name="executionId" from="executionId"/>
+                <field-map field-name="status" value="success"/>
+                <field-map field-name="endTime" from="ec.user.nowTimestamp"/>
+                <field-map field-name="duration" from="duration"/>
+                <field-map field-name="logs" from="executionContext.logs"/>
+            </service-call>
+            
+            <set field="success" from="true"/>
+            <set field="message" value="工作流执行成功"/>
+        </actions>
+    </service>
+
+    <service verb="validate" noun="Workflow" authenticate="anonymous-all">
+        <description>验证工作流完整性</description>
+        <in-parameters>
+            <parameter name="workflow" type="Map" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="valid" type="Boolean"/>
+            <parameter name="errors" type="List"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                def errors = []
+                def workflow = context.workflow
+                def nodes = workflow.nodes ?: []
+                def connections = workflow.connections ?: []
+                
+                // 1. 检查是否有节点
+                if (nodes.isEmpty()) {
+                    errors.add("工作流至少需要一个节点")
+                }
+                
+                // 2. 检查是否有输入节点
+                def hasInputNode = nodes.any { it.type == 'input' }
+                if (!hasInputNode) {
+                    errors.add("工作流至少需要一个输入节点")
+                }
+                
+                // 3. 检查节点配置
+                nodes.each { node ->
+                    // 验证节点类型
+                    def nodeTypeResult = ec.service.sync()
+                        .name("NovelAnimeWorkflowNodeServices.get#NodeType")
+                        .parameter("nodeTypeId", node.nodeTypeId)
+                        .call()
+                    
+                    if (!nodeTypeResult.nodeType) {
+                        errors.add("未知的节点类型: ${node.nodeTypeId}")
+                    } else {
+                        // 验证节点配置
+                        def configResult = ec.service.sync()
+                            .name("NovelAnimeWorkflowNodeServices.validate#NodeConfig")
+                            .parameter("nodeTypeId", node.nodeTypeId)
+                            .parameter("config", node.config ?: [:])
+                            .call()
+                        
+                        if (!configResult.valid) {
+                            errors.addAll(configResult.errors.collect { "节点 ${node.name}: ${it}" })
+                        }
+                    }
+                }
+                
+                // 4. 检查连接
+                connections.each { conn ->
+                    // 检查源节点和目标节点是否存在
+                    def fromNode = nodes.find { it.id == conn.from.nodeId }
+                    def toNode = nodes.find { it.id == conn.to.nodeId }
+                    
+                    if (!fromNode) {
+                        errors.add("连接的源节点不存在: ${conn.from.nodeId}")
+                    }
+                    if (!toNode) {
+                        errors.add("连接的目标节点不存在: ${conn.to.nodeId}")
+                    }
+                    
+                    if (fromNode && toNode) {
+                        // 验证连接兼容性
+                        def connResult = ec.service.sync()
+                            .name("NovelAnimeWorkflowNodeServices.validate#NodeConnection")
+                            .parameter("fromNodeType", fromNode.nodeTypeId)
+                            .parameter("fromPortId", conn.from.portId)
+                            .parameter("toNodeType", toNode.nodeTypeId)
+                            .parameter("toPortId", conn.to.portId)
+                            .call()
+                        
+                        if (!connResult.compatible) {
+                            errors.add("连接不兼容: ${fromNode.name} -> ${toNode.name}: ${connResult.message}")
+                        }
+                    }
+                }
+                
+                // 5. 检查孤立节点
+                def connectedNodes = new HashSet()
+                connections.each { conn ->
+                    connectedNodes.add(conn.from.nodeId)
+                    connectedNodes.add(conn.to.nodeId)
+                }
+                
+                nodes.each { node ->
+                    if (node.type != 'input' && !connectedNodes.contains(node.id)) {
+                        errors.add("孤立节点: ${node.name}")
+                    }
+                }
+                
+                context.valid = errors.isEmpty()
+                context.errors = errors
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="topological" noun="Sort" authenticate="anonymous-all">
+        <description>对工作流节点进行拓扑排序</description>
+        <in-parameters>
+            <parameter name="workflow" type="Map" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="executionOrder" type="List"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                def workflow = context.workflow
+                def nodes = workflow.nodes ?: []
+                def connections = workflow.connections ?: []
+                
+                // 构建邻接表和入度表
+                def graph = [:]
+                def inDegree = [:]
+                
+                nodes.each { node ->
+                    graph[node.id] = []
+                    inDegree[node.id] = 0
+                }
+                
+                connections.each { conn ->
+                    graph[conn.from.nodeId].add(conn.to.nodeId)
+                    inDegree[conn.to.nodeId]++
+                }
+                
+                // Kahn算法进行拓扑排序
+                def queue = []
+                def executionOrder = []
+                
+                // 将所有入度为0的节点加入队列
+                inDegree.each { nodeId, degree ->
+                    if (degree == 0) {
+                        queue.add(nodeId)
+                    }
+                }
+                
+                while (!queue.isEmpty()) {
+                    def nodeId = queue.remove(0)
+                    executionOrder.add(nodeId)
+                    
+                    // 遍历该节点的所有邻居
+                    graph[nodeId].each { neighbor ->
+                        inDegree[neighbor]--
+                        if (inDegree[neighbor] == 0) {
+                            queue.add(neighbor)
+                        }
+                    }
+                }
+                
+                // 检查是否存在循环依赖
+                if (executionOrder.size() != nodes.size()) {
+                    context.success = false
+                    context.message = "工作流存在循环依赖"
+                    context.executionOrder = []
+                } else {
+                    context.success = true
+                    context.executionOrder = executionOrder
+                    context.message = "拓扑排序成功"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="execute" noun="Node" authenticate="anonymous-all">
+        <description>执行单个节点</description>
+        <in-parameters>
+            <parameter name="executionContext" type="Map" required="true"/>
+            <parameter name="nodeId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                def executionContext = context.executionContext
+                def workflow = executionContext.workflow
+                def node = workflow.nodes.find { it.id == nodeId }
+                
+                if (!node) {
+                    context.success = false
+                    context.message = "节点不存在: ${nodeId}"
+                    return
+                }
+                
+                // 更新节点状态为running
+                executionContext.nodeStates[nodeId].status = 'running'
+                executionContext.nodeStates[nodeId].startTime = ec.user.nowTimestamp
+                
+                executionContext.logs.add([
+                    timestamp: ec.user.nowTimestamp,
+                    level: 'info',
+                    nodeId: nodeId,
+                    message: "开始执行节点: ${node.name}"
+                ])
+                
+                try {
+                    // 获取节点输入数据
+                    def inputs = [:]
+                    def connections = workflow.connections ?: []
+                    
+                    connections.each { conn ->
+                        if (conn.to.nodeId == nodeId) {
+                            def fromNodeId = conn.from.nodeId
+                            def fromPortId = conn.from.portId
+                            def toPortId = conn.to.portId
+                            
+                            // 从源节点的输出中获取数据
+                            if (executionContext.nodeOutputs.containsKey(fromNodeId)) {
+                                def fromOutputs = executionContext.nodeOutputs[fromNodeId]
+                                if (fromOutputs.containsKey(fromPortId)) {
+                                    inputs[toPortId] = fromOutputs[fromPortId]
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 根据节点类型执行相应的处理
+                    def outputs = [:]
+                    
+                    switch (node.nodeTypeId) {
+                        case 'INPUT_NOVEL':
+                            // 从配置中获取小说ID，读取小说内容
+                            def novelId = node.config?.novelId
+                            if (novelId) {
+                                def novelResult = ec.entity.find("novel.anime.Novel")
+                                    .condition("novelId", novelId)
+                                    .one()
+                                if (novelResult) {
+                                    outputs.text = novelResult.originalText
+                                }
+                            }
+                            break
+                            
+                        case 'PROCESS_SCENE_ANALYSIS':
+                            // 调用场景分析服务
+                            if (inputs.text) {
+                                // 这里应该调用实际的场景分析服务
+                                // 为了演示，我们创建一个简单的输出
+                                outputs.scenes = [[
+                                    title: "场景1",
+                                    setting: "未知",
+                                    mood: "中性"
+                                ]]
+                            }
+                            break
+                            
+                        case 'PROCESS_DIALOGUE_EXTRACT':
+                            // 调用对话提取服务
+                            if (inputs.text) {
+                                outputs.dialogues = []
+                            }
+                            break
+                            
+                        case 'OUTPUT_JSON':
+                            // 导出JSON
+                            if (inputs.data) {
+                                def filename = node.config?.filename ?: "output.json"
+                                def pretty = node.config?.pretty ?: true
+                                // 这里应该实际写入文件
+                                executionContext.logs.add([
+                                    timestamp: ec.user.nowTimestamp,
+                                    level: 'info',
+                                    nodeId: nodeId,
+                                    message: "导出JSON到: ${filename}"
+                                ])
+                            }
+                            break
+                            
+                        default:
+                            // 其他节点类型的处理
+                            executionContext.logs.add([
+                                timestamp: ec.user.nowTimestamp,
+                                level: 'warn',
+                                nodeId: nodeId,
+                                message: "节点类型 ${node.nodeTypeId} 的处理器尚未实现"
+                            ])
+                    }
+                    
+                    // 保存节点输出
+                    executionContext.nodeOutputs[nodeId] = outputs
+                    
+                    // 更新节点状态为completed
+                    executionContext.nodeStates[nodeId].status = 'completed'
+                    executionContext.nodeStates[nodeId].endTime = ec.user.nowTimestamp
+                    
+                    executionContext.logs.add([
+                        timestamp: ec.user.nowTimestamp,
+                        level: 'info',
+                        nodeId: nodeId,
+                        message: "节点执行完成: ${node.name}"
+                    ])
+                    
+                    context.success = true
+                    context.message = "节点执行成功"
+                    
+                } catch (Exception e) {
+                    // 节点执行失败
+                    executionContext.nodeStates[nodeId].status = 'error'
+                    executionContext.nodeStates[nodeId].error = e.message
+                    executionContext.nodeStates[nodeId].endTime = ec.user.nowTimestamp
+                    
+                    executionContext.logs.add([
+                        timestamp: ec.user.nowTimestamp,
+                        level: 'error',
+                        nodeId: nodeId,
+                        message: "节点执行失败: ${e.message}"
+                    ])
+                    
+                    context.success = false
+                    context.message = e.message
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+</services>
+
+    <!-- ========== Pause and Resume Services ========== -->
+    
+    <service verb="pause" noun="WorkflowExecution" authenticate="anonymous-all">
+        <description>暂停工作流执行</description>
+        <in-parameters>
+            <parameter name="executionId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.WorkflowExecution" value-field="execution">
+                <field-map field-name="executionId" from="executionId"/>
+            </entity-find-one>
+            
+            <if condition="!execution">
+                <return error="true" message="执行记录不存在"/>
+            </if>
+            
+            <if condition="execution.status != 'running'">
+                <return error="true" message="只能暂停正在运行的工作流"/>
+            </if>
+            
+            <!-- 更新状态为paused -->
+            <service-call name="NovelAnimeWorkflowServices.update#WorkflowExecution">
+                <field-map field-name="executionId" from="executionId"/>
+                <field-map field-name="status" value="paused"/>
+            </service-call>
+            
+            <set field="success" from="true"/>
+            <set field="message" value="工作流已暂停"/>
+        </actions>
+    </service>
+
+    <service verb="resume" noun="WorkflowExecution" authenticate="anonymous-all">
+        <description>恢复工作流执行</description>
+        <in-parameters>
+            <parameter name="executionId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.WorkflowExecution" value-field="execution">
+                <field-map field-name="executionId" from="executionId"/>
+            </entity-find-one>
+            
+            <if condition="!execution">
+                <return error="true" message="执行记录不存在"/>
+            </if>
+            
+            <if condition="execution.status != 'paused'">
+                <return error="true" message="只能恢复已暂停的工作流"/>
+            </if>
+            
+            <!-- 更新状态为running -->
+            <service-call name="NovelAnimeWorkflowServices.update#WorkflowExecution">
+                <field-map field-name="executionId" from="executionId"/>
+                <field-map field-name="status" value="running"/>
+            </service-call>
+            
+            <!-- TODO: 实际恢复执行逻辑 -->
+            
+            <set field="success" from="true"/>
+            <set field="message" value="工作流已恢复"/>
+        </actions>
+    </service>
+
+    <service verb="cancel" noun="WorkflowExecution" authenticate="anonymous-all">
+        <description>取消工作流执行</description>
+        <in-parameters>
+            <parameter name="executionId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.WorkflowExecution" value-field="execution">
+                <field-map field-name="executionId" from="executionId"/>
+            </entity-find-one>
+            
+            <if condition="!execution">
+                <return error="true" message="执行记录不存在"/>
+            </if>
+            
+            <if condition="execution.status == 'success' || execution.status == 'failed'">
+                <return error="true" message="无法取消已完成的工作流"/>
+            </if>
+            
+            <!-- 更新状态为cancelled -->
+            <service-call name="NovelAnimeWorkflowServices.update#WorkflowExecution">
+                <field-map field-name="executionId" from="executionId"/>
+                <field-map field-name="status" value="cancelled"/>
+                <field-map field-name="endTime" from="ec.user.nowTimestamp"/>
+            </service-call>
+            
+            <set field="success" from="true"/>
+            <set field="message" value="工作流已取消"/>
+        </actions>
+    </service>
+
+    <!-- ========== Error Handling and Retry Services ========== -->
+    
+    <service verb="retry" noun="NodeExecution" authenticate="anonymous-all">
+        <description>重试失败的节点执行</description>
+        <in-parameters>
+            <parameter name="executionContext" type="Map" required="true"/>
+            <parameter name="nodeId" type="String" required="true"/>
+            <parameter name="maxRetries" type="Integer" default-value="3"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                def executionContext = context.executionContext
+                def nodeState = executionContext.nodeStates[nodeId]
+                def maxRetries = context.maxRetries ?: 3
+                
+                if (!nodeState) {
+                    context.success = false
+                    context.message = "节点状态不存在"
+                    return
+                }
+                
+                if (nodeState.retryCount >= maxRetries) {
+                    context.success = false
+                    context.message = "已达到最大重试次数 (${maxRetries})"
+                    return
+                }
+                
+                // 增加重试计数
+                nodeState.retryCount++
+                
+                executionContext.logs.add([
+                    timestamp: ec.user.nowTimestamp,
+                    level: 'info',
+                    nodeId: nodeId,
+                    message: "重试节点执行 (第 ${nodeState.retryCount} 次)"
+                ])
+                
+                // 重置节点状态
+                nodeState.status = 'pending'
+                nodeState.error = null
+                
+                context.success = true
+                context.message = "节点已重置，准备重试"
+            ]]></script>
+            
+            <!-- 执行节点 -->
+            <service-call name="NovelAnimeWorkflowExecutionServices.execute#Node" out-map="execResult">
+                <field-map field-name="executionContext" from="executionContext"/>
+                <field-map field-name="nodeId" from="nodeId"/>
+            </service-call>
+            
+            <set field="success" from="execResult.success"/>
+            <set field="message" from="execResult.message"/>
+        </actions>
+    </service>
+
+    <service verb="handle" noun="NodeError" authenticate="anonymous-all">
+        <description>处理节点执行错误</description>
+        <in-parameters>
+            <parameter name="executionContext" type="Map" required="true"/>
+            <parameter name="nodeId" type="String" required="true"/>
+            <parameter name="error" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="action" type="String"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                def executionContext = context.executionContext
+                def nodeState = executionContext.nodeStates[nodeId]
+                def error = context.error
+                
+                executionContext.logs.add([
+                    timestamp: ec.user.nowTimestamp,
+                    level: 'error',
+                    nodeId: nodeId,
+                    message: "节点错误: ${error}"
+                ])
+                
+                // 根据错误类型决定处理策略
+                def action = 'fail'
+                def message = error
+                
+                // 网络错误 - 可以重试
+                if (error.contains('timeout') || error.contains('connection')) {
+                    if (nodeState.retryCount < 3) {
+                        action = 'retry'
+                        message = "网络错误，将自动重试"
+                    }
+                }
+                // 配置错误 - 不重试
+                else if (error.contains('config') || error.contains('parameter')) {
+                    action = 'fail'
+                    message = "配置错误，请检查节点配置"
+                }
+                // 数据错误 - 不重试
+                else if (error.contains('data') || error.contains('invalid')) {
+                    action = 'fail'
+                    message = "数据错误，请检查输入数据"
+                }
+                // 其他错误 - 尝试重试一次
+                else {
+                    if (nodeState.retryCount < 1) {
+                        action = 'retry'
+                        message = "未知错误，尝试重试"
+                    }
+                }
+                
+                context.action = action
+                context.message = message
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="recover" noun="WorkflowExecution" authenticate="anonymous-all">
+        <description>从错误中恢复工作流执行</description>
+        <in-parameters>
+            <parameter name="executionId" type="String" required="true"/>
+            <parameter name="fromNodeId" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.WorkflowExecution" value-field="execution">
+                <field-map field-name="executionId" from="executionId"/>
+            </entity-find-one>
+            
+            <if condition="!execution">
+                <return error="true" message="执行记录不存在"/>
+            </if>
+            
+            <if condition="execution.status != 'failed'">
+                <return error="true" message="只能恢复失败的工作流"/>
+            </if>
+            
+            <!-- 加载工作流 -->
+            <service-call name="NovelAnimeWorkflowServices.get#Workflow" out-map="workflowResult">
+                <field-map field-name="workflowId" from="execution.workflowId"/>
+            </service-call>
+            
+            <!-- 解析执行日志，找到失败的节点 -->
+            <script><![CDATA[
+                def logs = execution.logsJson ? new groovy.json.JsonSlurper().parseText(execution.logsJson) : []
+                def failedNodeId = fromNodeId
+                
+                if (!failedNodeId) {
+                    // 从日志中查找最后一个失败的节点
+                    def errorLogs = logs.findAll { it.level == 'error' && it.nodeId }
+                    if (errorLogs) {
+                        failedNodeId = errorLogs.last().nodeId
+                    }
+                }
+                
+                context.failedNodeId = failedNodeId
+            ]]></script>
+            
+            <if condition="!failedNodeId">
+                <return error="true" message="无法确定失败的节点"/>
+            </if>
+            
+            <!-- 更新状态为running，准备重新执行 -->
+            <service-call name="NovelAnimeWorkflowServices.update#WorkflowExecution">
+                <field-map field-name="executionId" from="executionId"/>
+                <field-map field-name="status" value="running"/>
+            </service-call>
+            
+            <set field="success" from="true"/>
+            <set field="message" value="工作流已准备从节点 ${failedNodeId} 恢复"/>
+        </actions>
+    </service>
+
+</services>

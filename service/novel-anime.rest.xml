@@ -4,235 +4,198 @@
         name="novel-anime" displayName="Novel Anime Generator REST API" version="1.0.0" require-authentication="anonymous-view"
         description="REST API for Novel Anime Generator - User Authentication and Credits Management">
 
-    <!-- Auth Resources -->
+    <!-- Authentication Resources -->
     <resource name="auth">
         <resource name="status">
-            <method type="get"><service name="NovelAnimeAuthServices.get#SystemStatus"/></method>
+            <method type="get"><service name="novel.anime.AuthServices.get#SystemStatus"/></method>
         </resource>
-        <resource name="register"><method type="post">
-            <service name="NovelAnimeAuthServices.register#User"/></method></resource>
-        <resource name="login"><method type="post">
-            <service name="NovelAnimeAuthServices.login#User"/></method></resource>
-        <resource name="validate">
-            <method type="get"><service name="NovelAnimeAuthServices.validate#Token"/></method>
-            <method type="post"><service name="NovelAnimeAuthServices.validate#Token"/></method>
+        <resource name="login">
+            <method type="post"><service name="novel.anime.AuthServices.login#User"/></method>
         </resource>
-        <resource name="profile">
-            <method type="get"><service name="NovelAnimeAuthServices.get#UserProfile"/></method>
-            <method type="put"><service name="NovelAnimeAuthServices.update#UserProfile"/></method>
+        <resource name="register">
+            <method type="post"><service name="novel.anime.AuthServices.register#User"/></method>
         </resource>
-        <resource name="avatar">
-            <method type="post"><service name="NovelAnimeAuthServices.upload#Avatar"/></method>
+        <resource name="logout">
+            <method type="post"><service name="novel.anime.AuthServices.logout#User"/></method>
         </resource>
-        <resource name="change-password">
-            <method type="post"><service name="NovelAnimeAuthServices.change#Password"/></method>
-        </resource>
-        <resource name="logout"><method type="post">
-            <service name="NovelAnimeAuthServices.logout#User"/></method></resource>
-        <resource name="refresh"><method type="post">
-            <service name="NovelAnimeAuthServices.refresh#Token"/></method></resource>
-
-        <!-- OAuth Resources -->
-        <resource name="oauth">
-            <!-- GitHub OAuth -->
-            <resource name="github">
-                <resource name="url"><method type="get">
-                    <service name="NovelAnimeAuthServices.get#GitHubAuthUrl"/></method></resource>
-                <method type="post"><service name="NovelAnimeAuthServices.login#WithGitHub"/></method>
-                <resource name="callback"><method type="get">
-                    <service name="NovelAnimeAuthServices.handle#GitHubCallback"/></method></resource>
-            </resource>
-
-            <!-- Google OAuth -->
-            <resource name="google">
-                <resource name="url"><method type="get">
-                    <service name="NovelAnimeAuthServices.get#GoogleAuthUrl"/></method></resource>
-                <method type="post"><service name="NovelAnimeAuthServices.login#WithGoogle"/></method>
-                <resource name="callback"><method type="get">
-                    <service name="NovelAnimeAuthServices.handle#GoogleCallback"/></method></resource>
-            </resource>
-
-            <!-- WeChat OAuth -->
-            <resource name="wechat">
-                <method type="post"><service name="NovelAnimeAuthServices.login#WithWeChat"/></method>
-                <resource name="callback"><method type="get">
-                    <service name="NovelAnimeAuthServices.handle#WeChatCallback"/></method></resource>
-            </resource>
-        </resource>
-
-        <!-- WeChat QR Code -->
-        <resource name="wechat">
-            <resource name="qrcode"><method type="get">
-                <service name="NovelAnimeAuthServices.get#WeChatQRCode"/></method></resource>
-            <resource name="status"><method type="get">
-                <service name="NovelAnimeAuthServices.check#WeChatLoginStatus"/></method></resource>
+        <resource name="user">
+            <method type="get"><service name="novel.anime.AuthServices.get#CurrentUser"/></method>
         </resource>
     </resource>
 
-    <!-- Credits Resources -->
-    <resource name="credits">
-        <resource name="balance"><method type="get">
-            <service name="NovelAnimeCreditsServices.get#CreditsBalance"/></method></resource>
-        <resource name="consume"><method type="post">
-            <service name="NovelAnimeCreditsServices.consume#Credits"/></method></resource>
-        <resource name="history"><method type="get">
-            <service name="NovelAnimeCreditsServices.get#CreditsHistory"/></method></resource>
-    </resource>
-
-    <!-- AI Service Status -->
-    <resource name="ai">
+    <!-- Test Resources -->
+    <resource name="test">
         <resource name="status">
-            <method type="get"><service name="NovelAnimeAIServices.get#AIStatus"/></method>
-        </resource>
-        <resource name="test">
-            <method type="post"><service name="NovelAnimeAIServices.test#AIConnection"/></method>
+            <method type="get"><service name="novel.anime.TestServices.get#TestStatus"/></method>
         </resource>
     </resource>
 
-    <!-- Project Management Resources -->
+    <!-- Workflow Resources -->
+    <resource name="workflows">
+        <method type="get"><service name="novel.anime.TestServices.get#Workflows"/></method>
+        <method type="post"><service name="novel.anime.TestServices.create#Workflow"/></method>
+    </resource>
+
+    <!-- Single Workflow Resource -->
+    <resource name="workflow">
+        <method type="get"><service name="novel.anime.TestServices.get#Workflow"/></method>
+        <method type="put"><service name="novel.anime.TestServices.update#Workflow"/></method>
+        <method type="delete"><service name="novel.anime.TestServices.delete#Workflow"/></method>
+    </resource>
+
+    <!-- Workflow Execution Resources -->
+    <resource name="workflow-executions">
+        <method type="get"><service name="novel.anime.TestServices.get#WorkflowExecutions"/></method>
+        <method type="post"><service name="novel.anime.TestServices.create#WorkflowExecution"/></method>
+    </resource>
+
+    <!-- Single Workflow Execution Resource -->
+    <resource name="workflow-execution">
+        <method type="get"><service name="novel.anime.TestServices.get#WorkflowExecution"/></method>
+        <method type="post"><service name="novel.anime.TestServices.create#WorkflowExecution"/></method>
+        <method type="put"><service name="novel.anime.TestServices.update#WorkflowExecution"/></method>
+    </resource>
+
+    <!-- Workflow Template Resources -->
+    <resource name="workflow-templates">
+        <method type="get"><service name="novel.anime.TestServices.get#WorkflowTemplates"/></method>
+        <method type="post"><service name="novel.anime.TestServices.create#WorkflowTemplate"/></method>
+    </resource>
+
+    <!-- Single Workflow Template Resource -->
+    <resource name="workflow-template">
+        <method type="get"><service name="novel.anime.TestServices.get#WorkflowTemplate"/></method>
+        <method type="put"><service name="novel.anime.TestServices.update#WorkflowTemplate"/></method>
+        <method type="delete"><service name="novel.anime.TestServices.delete#WorkflowTemplate"/></method>
+    </resource>
+
+    <!-- Asset Resources -->
+    <resource name="assets">
+        <method type="get"><service name="novel.anime.TestServices.get#Assets"/></method>
+        <method type="post"><service name="novel.anime.TestServices.create#Asset"/></method>
+    </resource>
+
+    <!-- Single Asset Resource -->
+    <resource name="asset">
+        <method type="get"><service name="novel.anime.TestServices.get#Asset"/></method>
+        <method type="put"><service name="novel.anime.TestServices.update#Asset"/></method>
+        <method type="delete"><service name="novel.anime.TestServices.delete#Asset"/></method>
+    </resource>
+
+    <!-- User Settings Resources -->
+    <resource name="user-settings">
+        <method type="get"><service name="novel.anime.TestServices.get#UserSettings"/></method>
+        <method type="put"><service name="novel.anime.TestServices.update#UserSettings"/></method>
+    </resource>
+
+    <!-- Project Resources -->
     <resource name="projects">
-        <method type="post" require-authentication="anonymous-all"><service name="NovelAnimeRestServices.create#Project"/></method>
-        <method type="get"><service name="NovelAnimeRestServices.get#Projects"/></method>
-    </resource>
-    
-    <resource name="project" single="true">
-        <method type="get"><service name="NovelAnimeRestServices.get#Project"/></method>
-        <method type="put"><service name="NovelAnimeRestServices.update#Project"/></method>
-        <method type="delete"><service name="NovelAnimeRestServices.delete#Project"/></method>
+        <method type="get"><service name="novel.anime.TestServices.get#Projects"/></method>
+        <method type="post"><service name="novel.anime.TestServices.create#Project"/></method>
     </resource>
 
-    <!-- Novel Management Resources -->
+    <!-- Novel Resources -->
     <resource name="novels">
-        <method type="get"><service name="NovelAnimeRestServices.get#Novels"/></method>
-        
+        <method type="get"><service name="novel.anime.TestServices.get#Novels"/></method>
         <resource name="import-text">
-            <method type="post" require-authentication="anonymous-all"><service name="NovelAnimeRestServices.create#NovelFromText"/></method>
+            <method type="post"><service name="novel.anime.TestServices.import#NovelText"/></method>
         </resource>
-        
         <resource name="import-file">
-            <method type="post" require-authentication="anonymous-all"><service name="NovelAnimeRestServices.create#NovelFromFile"/></method>
+            <method type="post"><service name="novel.anime.TestServices.import#NovelFile"/></method>
         </resource>
-        
-        <resource name="extract-content">
-            <method type="post" require-authentication="anonymous-all"><service name="NovelAnimeRestServices.extract#FileContent"/></method>
-        </resource>
-        
         <resource name="analyze-structure">
-            <method type="post"><service name="NovelAnimeAIServices.analyze#NovelStructure"/></method>
+            <method type="post"><service name="novel.anime.TestServices.analyze#NovelStructure"/></method>
         </resource>
-        
-        <resource name="debug-structure">
-            <method type="get"><service name="NovelAnimeAIServices.debug#NovelStructure"/></method>
-        </resource>
-        
         <resource name="extract-characters">
-            <method type="post"><service name="NovelAnimeAIServices.extract#Characters"/></method>
+            <method type="post"><service name="novel.anime.TestServices.extract#NovelCharacters"/></method>
         </resource>
-        
-        <resource name="characters">
-            <method type="get"><service name="NovelAnimeCharacterServices.get#Characters"/></method>
-        </resource>
-        
-        <resource name="scenes">
-            <method type="get"><service name="NovelAnimeSceneServices.get#Scenes"/></method>
-            
-            <resource name="enhance">
-                <method type="post"><service name="NovelAnimeSceneServices.enhance#Scenes"/></method>
-            </resource>
-        </resource>
-        
         <resource name="episodes">
-            <method type="get"><service name="NovelAnimeEpisodeServices.get#Episodes"/></method>
-            
+            <method type="get"><service name="novel.anime.TestServices.get#Episodes"/></method>
             <resource name="generate">
-                <method type="post"><service name="NovelAnimeEpisodeServices.generate#Episodes"/></method>
+                <method type="post"><service name="novel.anime.TestServices.generate#Episodes"/></method>
+            </resource>
+            <resource name="stats">
+                <method type="get"><service name="novel.anime.TestServices.get#EpisodeStats"/></method>
             </resource>
         </resource>
-        
-        <resource name="pipeline">
-            <resource name="status">
-                <method type="get"><service name="NovelAnimePipelineServices.get#PipelineStatus"/></method>
+        <resource name="scenes">
+            <method type="get"><service name="novel.anime.TestServices.get#Scenes"/></method>
+            <resource name="enhance">
+                <method type="post"><service name="novel.anime.TestServices.enhance#Scenes"/></method>
             </resource>
+            <resource name="stats">
+                <method type="get"><service name="novel.anime.TestServices.get#SceneStats"/></method>
+            </resource>
+        </resource>
+        <resource name="pipeline">
             <resource name="create">
-                <method type="post"><service name="NovelAnimePipelineServices.create#ProcessingPipeline"/></method>
+                <method type="post"><service name="novel.anime.TestServices.create#Pipeline"/></method>
+            </resource>
+            <resource name="status">
+                <method type="get"><service name="novel.anime.TestServices.get#PipelineStatus"/></method>
             </resource>
             <resource name="update">
-                <method type="put"><service name="NovelAnimePipelineServices.update#PipelineProgress"/></method>
+                <method type="put"><service name="novel.anime.TestServices.update#PipelineProgress"/></method>
             </resource>
             <resource name="complete">
-                <method type="post"><service name="NovelAnimePipelineServices.complete#ProcessingPipeline"/></method>
+                <method type="post"><service name="novel.anime.TestServices.complete#Pipeline"/></method>
             </resource>
             <resource name="fail">
-                <method type="post"><service name="NovelAnimePipelineServices.fail#ProcessingPipeline"/></method>
+                <method type="post"><service name="novel.anime.TestServices.fail#Pipeline"/></method>
             </resource>
         </resource>
     </resource>
-    
-    <resource name="novel" single="true">
-        <method type="get"><service name="NovelAnimeRestServices.get#Novel"/></method>
-        <method type="put"><service name="NovelAnimeRestServices.update#Novel"/></method>
-        <method type="delete"><service name="NovelAnimeRestServices.delete#Novel"/></method>
+
+    <!-- Single Novel Resource -->
+    <resource name="novel">
+        <method type="get"><service name="novel.anime.TestServices.get#Novel"/></method>
+        <method type="put"><service name="novel.anime.TestServices.update#Novel"/></method>
+        <method type="delete"><service name="novel.anime.TestServices.delete#Novel"/></method>
     </resource>
 
-    <!-- Scene Management Resources -->
-    <resource name="scenes">
-        <method type="get"><service name="NovelAnimeSceneServices.get#Scenes"/></method>
-        
-        <resource name="enhance">
-            <method type="post"><service name="NovelAnimeSceneServices.enhance#Scenes"/></method>
-        </resource>
-    </resource>
-    
-    <resource name="scene" single="true">
-        <method type="put"><service name="NovelAnimeSceneServices.update#Scene"/></method>
-        
-        <resource name="approve">
-            <method type="post"><service name="NovelAnimeSceneServices.approve#Scene"/></method>
-        </resource>
-        
-        <resource name="reanalyze">
-            <method type="post"><service name="NovelAnimeSceneServices.reanalyze#Scene"/></method>
-        </resource>
-    </resource>
-
-    <!-- Character Management Resources (root level) -->
+    <!-- Characters Resources -->
     <resource name="characters">
-        <method type="get"><service name="NovelAnimeCharacterServices.get#Characters"/></method>
-    </resource>
-    
-    <resource name="character" single="true">
-        <method type="get"><service name="NovelAnimeCharacterServices.get#Character"/></method>
-        <method type="put"><service name="NovelAnimeCharacterServices.update#Character"/></method>
-        <method type="delete"><service name="NovelAnimeCharacterServices.delete#Character"/></method>
-        
-        <resource name="lock">
-            <method type="post"><service name="NovelAnimeCharacterServices.lock#Character"/></method>
-        </resource>
-        
-        <resource name="relationships">
-            <method type="post"><service name="NovelAnimeCharacterServices.create#CharacterRelationship"/></method>
-        </resource>
-    </resource>
-    
-    <resource name="characters-merge">
-        <method type="post"><service name="NovelAnimeCharacterServices.merge#Characters"/></method>
+        <method type="get"><service name="novel.anime.TestServices.get#Characters"/></method>
     </resource>
 
-    <!-- Episode Management Resources -->
-    <resource name="episodes">
-        <method type="get"><service name="NovelAnimeEpisodeServices.get#Episodes"/></method>
-        
-        <resource name="generate">
-            <method type="post"><service name="NovelAnimeEpisodeServices.generate#Episodes"/></method>
+    <!-- Single Character Resource -->
+    <resource name="character">
+        <method type="get"><service name="novel.anime.TestServices.get#Character"/></method>
+        <method type="put"><service name="novel.anime.TestServices.update#Character"/></method>
+        <method type="delete"><service name="novel.anime.TestServices.delete#Character"/></method>
+        <resource name="lock">
+            <method type="post"><service name="novel.anime.TestServices.lock#Character"/></method>
+        </resource>
+        <resource name="relationships">
+            <method type="post"><service name="novel.anime.TestServices.create#CharacterRelationship"/></method>
         </resource>
     </resource>
-    
-    <resource name="episode" single="true">
-        <method type="put"><service name="NovelAnimeEpisodeServices.update#Episode"/></method>
-        <method type="delete"><service name="NovelAnimeEpisodeServices.delete#Episode"/></method>
-        
+
+    <!-- Character Merge -->
+    <resource name="characters-merge">
+        <method type="post"><service name="novel.anime.TestServices.merge#Characters"/></method>
+    </resource>
+
+    <!-- Episode Resources -->
+    <resource name="episode">
+        <method type="put"><service name="novel.anime.TestServices.update#Episode"/></method>
+        <method type="delete"><service name="novel.anime.TestServices.delete#Episode"/></method>
         <resource name="screenplay">
-            <method type="post"><service name="NovelAnimeEpisodeServices.generate#Screenplay"/></method>
+            <method type="post"><service name="novel.anime.TestServices.generate#EpisodeScreenplay"/></method>
+        </resource>
+        <resource name="adjust-boundaries">
+            <method type="post"><service name="novel.anime.TestServices.adjust#EpisodeBoundaries"/></method>
+        </resource>
+    </resource>
+
+    <!-- Scene Resources -->
+    <resource name="scene">
+        <method type="put"><service name="novel.anime.TestServices.update#Scene"/></method>
+        <resource name="approve">
+            <method type="post"><service name="novel.anime.TestServices.approve#Scene"/></method>
+        </resource>
+        <resource name="reanalyze">
+            <method type="post"><service name="novel.anime.TestServices.reanalyze#Scene"/></method>
         </resource>
     </resource>
 

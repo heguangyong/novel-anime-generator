@@ -1,10 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<component xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/moqui-component-3.xsd"
-        name="novel-anime-generator" version="1.0.0">
-    <component-depend name="mantle-udm"/>
+<component xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+           xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/moqui-conf-3.xsd"
+           name="novel-anime-generator" version="1.0.0">
+    <depends-on name="mantle-udm"/>
     
-    <!-- Load demo/test data -->
-    <entity-facade>
-        <load-data types="demo"/>
-    </entity-facade>
+    <!-- Service file includes -->
+    <service-include location="component://novel-anime-generator/service/novel/anime/AuthServices.xml"/>
+    <service-include location="component://novel-anime-generator/service/novel/anime/TestServices.xml"/>
+    
+    <!-- REST API configuration is in MoquiConf.xml -->
+    
+    <data-load>
+        <data-file file="data/NovelAnimeDemoData.xml" type="demo"/>
+    </data-load>
 </component>

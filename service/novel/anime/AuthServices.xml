@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <service verb="get" noun="SystemStatus" authenticate="false">
+        <description>Get system status for frontend health check</description>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="status" type="String"/>
+            <parameter name="version" type="String"/>
+            <parameter name="timestamp" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                status = "online"
+                version = "1.0.0"
+                timestamp = new Date().format('yyyy-MM-dd HH:mm:ss')
+                
+                ec.logger.info("System status check: online")
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="login" noun="User" authenticate="false">
+        <description>User login service</description>
+        <in-parameters>
+            <parameter name="username"/>
+            <parameter name="email"/>
+            <parameter name="password" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="accessToken" type="String"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // Accept either username or email for login
+                def loginIdentifier = username ?: email
+                
+                // For development, accept any login
+                if (loginIdentifier && password) {
+                    success = true
+                    accessToken = "dev-token-" + System.currentTimeMillis()
+                    
+                    // Determine if loginIdentifier is email or username
+                    def isEmail = loginIdentifier.contains("@")
+                    def userEmail = isEmail ? loginIdentifier : loginIdentifier + "@example.com"
+                    def userName = isEmail ? loginIdentifier.split("@")[0] : loginIdentifier
+                    
+                    user = [
+                        userId: "EX_JOHN_DOE",
+                        email: userEmail,
+                        username: userName,
+                        displayName: "Development User"
+                    ]
+                    message = "Login successful"
+                    
+                    ec.logger.info("Development login successful for: ${loginIdentifier}")
+                } else {
+                    success = false
+                    message = "Username/email and password are required"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="register" noun="User" authenticate="false">
+        <description>User registration service</description>
+        <in-parameters>
+            <parameter name="email" required="true"/>
+            <parameter name="password" required="true"/>
+            <parameter name="username"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="accessToken" type="String"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // For development, accept any registration
+                if (email && password) {
+                    success = true
+                    accessToken = "dev-token-" + System.currentTimeMillis()
+                    user = [
+                        userId: "USER_" + System.currentTimeMillis(),
+                        email: email,
+                        username: username ?: email.split("@")[0],
+                        displayName: username ?: email.split("@")[0]
+                    ]
+                    message = "Registration successful"
+                    
+                    ec.logger.info("Development registration successful for: ${email}")
+                } else {
+                    success = false
+                    message = "Email and password are required"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="logout" noun="User" authenticate="false">
+        <description>User logout service</description>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "Logout successful"
+                
+                ec.logger.info("User logout")
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="CurrentUser" authenticate="false">
+        <description>Get current user information</description>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="user" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                // For development, return a default user
+                success = true
+                user = [
+                    userId: "EX_JOHN_DOE",
+                    email: "dev@example.com",
+                    username: "dev",
+                    displayName: "Development User"
+                ]
+                message = "User retrieved successfully"
+                
+                ec.logger.info("Current user retrieved: ${user.email}")
+            ]]></script>
+        </actions>
+    </service>
+
+</services>

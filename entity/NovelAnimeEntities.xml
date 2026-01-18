@@ -30,6 +30,14 @@
         <field name="createdDate" type="date-time"/>
         <field name="lastUpdated" type="date-time"/>
         <relationship type="one" related="novel.anime.Project"/>
+        <!-- Performance: Index for project queries -->
+        <index name="NOVEL_PROJECT_IDX">
+            <index-field name="projectId"/>
+        </index>
+        <!-- Performance: Index for status filtering -->
+        <index name="NOVEL_STATUS_IDX">
+            <index-field name="status"/>
+        </index>
     </entity>
 
     <entity entity-name="Chapter" package="novel.anime" authorize-skip="create,update,delete">
@@ -41,12 +49,22 @@
         <field name="wordCount" type="number-integer"/>
         <field name="createdDate" type="date-time"/>
         <relationship type="one" related="novel.anime.Novel"/>
+        <!-- Performance: Index for novel queries -->
+        <index name="CHAPTER_NOVEL_IDX">
+            <index-field name="novelId"/>
+        </index>
+        <!-- Performance: Composite index for ordered queries -->
+        <index name="CHAPTER_NOVEL_NUMBER_IDX">
+            <index-field name="novelId"/>
+            <index-field name="chapterNumber"/>
+        </index>
     </entity>
 
     <entity entity-name="Scene" package="novel.anime" authorize-skip="create,update,delete">
         <field name="sceneId" type="id" is-pk="true"/>
         <field name="chapterId" type="id"/>
         <field name="sceneNumber" type="number-integer"/>
+        <field name="title" type="text-medium"/> <!-- 场景标题 -->
         <field name="content" type="text-very-long"/>
         <field name="setting" type="text-medium"/>
         <field name="mood" type="text-short"/>
@@ -56,6 +74,14 @@
         <field name="analysisStatus" type="text-short"/>
         <field name="isApproved" type="text-indicator"/>
         <relationship type="one" related="novel.anime.Chapter"/>
+        <!-- Performance: Index for chapter queries -->
+        <index name="SCENE_CHAPTER_IDX">
+            <index-field name="chapterId"/>
+        </index>
+        <!-- Performance: Index for status filtering -->
+        <index name="SCENE_STATUS_IDX">
+            <index-field name="analysisStatus"/>
+        </index>
     </entity>
 
     <!-- Character System Entities -->
@@ -73,6 +99,19 @@
         <field name="isLocked" type="text-indicator"/>
         <field name="createdDate" type="date-time"/>
         <relationship type="one" related="novel.anime.Novel"/>
+        <!-- Performance: Index for novel queries -->
+        <index name="CHARACTER_NOVEL_IDX">
+            <index-field name="novelId"/>
+        </index>
+        <!-- Performance: Index for role filtering -->
+        <index name="CHARACTER_ROLE_IDX">
+            <index-field name="role"/>
+        </index>
+        <!-- Performance: Composite index for filtered queries -->
+        <index name="CHARACTER_NOVEL_ROLE_IDX">
+            <index-field name="novelId"/>
+            <index-field name="role"/>
+        </index>
     </entity>
 
     <entity entity-name="CharacterRelationship" package="novel.anime">
@@ -163,16 +202,30 @@
     </entity>
 
     <!-- Asset Library Entities -->
-    <entity entity-name="Asset" package="novel.anime">
+    <entity entity-name="Asset" package="novel.anime" authorize-skip="create,update,delete">
         <field name="assetId" type="id" is-pk="true"/>
-        <field name="assetType" type="text-short"/> <!-- character, scene, template -->
+        <field name="projectId" type="id"/>
+        <field name="novelId" type="id"/>
+        <field name="userId" type="id"/>
+        <field name="assetType" type="text-short"/> <!-- character, scene, image, audio, video -->
         <field name="name" type="text-medium"/>
         <field name="description" type="text-long"/>
         <field name="filePath" type="text-medium"/>
+        <field name="fileSize" type="number-integer"/> <!-- in bytes -->
         <field name="metadata" type="text-very-long"/>
         <field name="version" type="text-short"/>
         <field name="isShared" type="text-indicator"/>
         <field name="createdDate" type="date-time"/>
+        <field name="lastUpdatedDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.Project"/>
+        <relationship type="one" related="novel.anime.Novel"/>
+        <relationship type="one" related="novel.anime.user.NovelAnimeUser"/>
+        <index name="ASSET_PROJECT_IDX">
+            <index-field name="projectId"/>
+        </index>
+        <index name="ASSET_TYPE_IDX">
+            <index-field name="assetType"/>
+        </index>
     </entity>
 
     <entity entity-name="AssetVersion" package="novel.anime">
@@ -260,6 +313,79 @@
             <index-field name="userId"/>
             <index-field name="timestamp"/>
         </index>
+    </entity>
+
+    <!-- ========== Workflow Management Entities ========== -->
+
+    <!-- 工作流定义 -->
+    <entity entity-name="Workflow" package="novel.anime" authorize-skip="create,update,delete">
+        <field name="workflowId" type="id" is-pk="true"/>
+        <field name="projectId" type="id"/>
+        <field name="userId" type="id"/>
+        <field name="name" type="text-medium" not-null="true"/>
+        <field name="description" type="text-long"/>
+        <field name="status" type="text-short" default="'idle'"/> <!-- idle, running, completed, error -->
+        <field name="nodesJson" type="text-very-long"/>
+        <field name="connectionsJson" type="text-very-long"/>
+        <field name="createdDate" type="date-time"/>
+        <field name="lastUpdatedDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.Project"/>
+        <relationship type="one" related="novel.anime.user.NovelAnimeUser"/>
+        <index name="WORKFLOW_PROJECT_IDX">
+            <index-field name="projectId"/>
+        </index>
+        <index name="WORKFLOW_USER_IDX">
+            <index-field name="userId"/>
+        </index>
+    </entity>
+
+    <!-- 工作流执行记录 -->
+    <entity entity-name="WorkflowExecution" package="novel.anime" authorize-skip="create,update,delete">
+        <field name="executionId" type="id" is-pk="true"/>
+        <field name="workflowId" type="id"/>
+        <field name="workflowName" type="text-medium"/>
+        <field name="status" type="text-short" default="'running'"/> <!-- running, success, failed, cancelled -->
+        <field name="startTime" type="date-time"/>
+        <field name="endTime" type="date-time"/>
+        <field name="duration" type="number-integer"/> <!-- in seconds -->
+        <field name="nodeCount" type="number-integer"/>
+        <field name="logsJson" type="text-very-long"/>
+        <field name="createdDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.Workflow"/>
+        <index name="WF_EXEC_WORKFLOW_IDX">
+            <index-field name="workflowId"/>
+        </index>
+    </entity>
+
+    <!-- 工作流模板 -->
+    <entity entity-name="WorkflowTemplate" package="novel.anime" authorize-skip="create,update,delete">
+        <field name="templateId" type="id" is-pk="true"/>
+        <field name="userId" type="id"/> <!-- null for built-in templates -->
+        <field name="name" type="text-medium" not-null="true"/>
+        <field name="description" type="text-long"/>
+        <field name="isBuiltIn" type="text-indicator" default="'N'"/>
+        <field name="nodeCount" type="number-integer"/>
+        <field name="estimatedTime" type="text-short"/>
+        <field name="useCase" type="text-medium"/>
+        <field name="nodesJson" type="text-very-long"/>
+        <field name="connectionsJson" type="text-very-long"/>
+        <field name="createdDate" type="date-time"/>
+        <field name="lastUpdatedDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.user.NovelAnimeUser"/>
+    </entity>
+
+    <!-- 用户设置 -->
+    <entity entity-name="UserSettings" package="novel.anime.user" authorize-skip="create,update,delete">
+        <field name="userId" type="id" is-pk="true"/>
+        <field name="theme" type="text-short" default="'system'"/> <!-- dark, light, system -->
+        <field name="language" type="text-short" default="'zh-CN'"/> <!-- zh-CN, en-US -->
+        <field name="notificationEmail" type="text-indicator" default="'Y'"/>
+        <field name="notificationPush" type="text-indicator" default="'Y'"/>
+        <field name="defaultWorkflowTemplate" type="id"/>
+        <field name="autoSave" type="text-indicator" default="'Y'"/>
+        <field name="createdDate" type="date-time"/>
+        <field name="lastUpdatedDate" type="date-time"/>
+        <relationship type="one" related="novel.anime.user.NovelAnimeUser"/>
     </entity>
 
 </entities>

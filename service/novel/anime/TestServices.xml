@@ -1,0 +1,1775 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <service verb="get" noun="TestStatus" authenticate="false">
+        <description>Simple test service</description>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "Test service working"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="UserSettings" authenticate="false">
+        <description>Get user settings</description>
+        <in-parameters>
+            <parameter name="userId"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="settings" type="Map"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                settings = [
+                    theme: "light",
+                    language: "zh-CN",
+                    autoSave: true
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="update" noun="UserSettings" authenticate="false">
+        <description>Update user settings</description>
+        <in-parameters>
+            <parameter name="userId"/>
+            <parameter name="theme"/>
+            <parameter name="language"/>
+            <parameter name="autoSave" type="Boolean"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+            <parameter name="settings" type="Map"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "用户设置更新成功"
+                settings = [
+                    theme: theme ?: "light",
+                    language: language ?: "zh-CN", 
+                    autoSave: autoSave ?: true
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Projects" authenticate="false">
+        <description>Get user projects</description>
+        <in-parameters>
+            <parameter name="userId"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="projects" type="List"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                try {
+                    success = true
+                    
+                    // 查询用户的项目列表
+                    def projectList = ec.entity.find("novel.anime.Project")
+                        .condition("userId", userId ?: "EX_JOHN_DOE")
+                        .orderBy("createdDate DESC")
+                        .disableAuthz()
+                        .list()
+                    
+                    // 转换为前端需要的格式
+                    projects = []
+                    projectList.each { project ->
+                        projects.add([
+                            projectId: project.projectId,
+                            id: project.projectId,
+                            name: project.name,
+                            description: project.description,
+                            status: project.status,
+                            userId: project.userId,
+                            createdDate: project.createdDate?.getTime() ?: System.currentTimeMillis(),
+                            updatedDate: project.lastUpdated?.getTime() ?: System.currentTimeMillis()
+                        ])
+                    }
+                    
+                    ec.logger.info("Found ${projects.size()} projects for user ${userId}")
+                } catch (Exception e) {
+                    ec.logger.error("Failed to get projects: ${e.message}", e)
+                    success = false
+                    projects = []
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="create" noun="Project" authenticate="false">
+        <description>Create new project</description>
+        <in-parameters>
+            <parameter name="name" required="true"/>
+            <parameter name="description"/>
+            <parameter name="userId"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="project" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                try {
+                    success = true
+                    message = "项目创建成功"
+                    
+                    // 确保有userId
+                    def effectiveUserId = userId ?: "EX_JOHN_DOE"
+                    
+                    // 创建项目实体
+                    def newProject = ec.entity.makeValue("novel.anime.Project")
+                        .setFields([
+                            name: name,
+                            description: description ?: "",
+                            userId: effectiveUserId,
+                            status: "active",
+                            createdDate: ec.user.nowTimestamp,
+                            lastUpdated: ec.user.nowTimestamp
+                        ], true, null, false)
+                        .setSequencedIdPrimary()
+                        .create()
+                    
+                    def projectId = newProject.projectId
+                    
+                    ec.logger.info("Project created: ${projectId} for user ${effectiveUserId}")
+                    
+                    // 返回项目数据
+                    project = [
+                        projectId: projectId,
+                        id: projectId,
+                        name: name,
+                        description: description ?: "",
+                        status: "active",
+                        userId: effectiveUserId,
+                        createdDate: newProject.createdDate?.getTime() ?: System.currentTimeMillis(),
+                        updatedDate: newProject.lastUpdated?.getTime() ?: System.currentTimeMillis()
+                    ]
+                } catch (Exception e) {
+                    ec.logger.error("Failed to create project: ${e.message}", e)
+                    success = false
+                    message = "项目创建失败: ${e.message}"
+                    project = null
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="import" noun="NovelText" authenticate="false">
+        <description>Import novel from text</description>
+        <in-parameters>
+            <parameter name="projectId"/>
+            <parameter name="title" required="true"/>
+            <parameter name="content" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="novel" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "小说导入成功"
+                
+                // 生成小说ID
+                def novelId = "novel_" + System.currentTimeMillis()
+                
+                novel = [
+                    novelId: novelId,
+                    id: novelId,
+                    title: title,
+                    projectId: projectId,
+                    status: "imported",
+                    wordCount: content?.length() ?: 0,
+                    author: "未知作者",
+                    chapters: [],
+                    createdDate: new Date(),
+                    updatedDate: new Date()
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="analyze" noun="NovelStructure" authenticate="false">
+        <description>Analyze novel structure</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="analysis" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "结构分析完成"
+                
+                analysis = [
+                    novelId: novelId,
+                    chaptersFound: 5,
+                    scenesFound: 15,
+                    totalWords: 50000,
+                    analysisDate: new Date(),
+                    chapters: [
+                        [chapterNumber: 1, title: "第一章 开始", wordCount: 10000],
+                        [chapterNumber: 2, title: "第二章 发展", wordCount: 12000],
+                        [chapterNumber: 3, title: "第三章 转折", wordCount: 11000],
+                        [chapterNumber: 4, title: "第四章 高潮", wordCount: 9000],
+                        [chapterNumber: 5, title: "第五章 结局", wordCount: 8000]
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="extract" noun="NovelCharacters" authenticate="false">
+        <description>Extract characters from novel</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="characters" type="List"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "角色提取完成"
+                
+                characters = [
+                    [
+                        characterId: "char_" + System.currentTimeMillis(),
+                        name: "主角",
+                        role: "protagonist",
+                        description: "故事的主人公，勇敢而善良",
+                        appearances: 25,
+                        importance: "high"
+                    ],
+                    [
+                        characterId: "char_" + (System.currentTimeMillis() + 1),
+                        name: "反派",
+                        role: "antagonist", 
+                        description: "故事的反面角色，狡猾而强大",
+                        appearances: 15,
+                        importance: "high"
+                    ],
+                    [
+                        characterId: "char_" + (System.currentTimeMillis() + 2),
+                        name: "配角",
+                        role: "supporting",
+                        description: "主角的朋友，提供帮助和支持",
+                        appearances: 10,
+                        importance: "medium"
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Novel" authenticate="false">
+        <description>Get single novel by ID</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="novel" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "小说获取成功"
+                
+                // 模拟小说数据
+                novel = [
+                    novelId: novelId,
+                    id: novelId,
+                    title: "测试小说",
+                    author: "测试作者",
+                    status: "imported",
+                    wordCount: 50000,
+                    description: "这是一个测试小说的描述",
+                    createdDate: new Date(),
+                    updatedDate: new Date(),
+                    chapters: [
+                        [
+                            chapterId: "chapter_1",
+                            chapterNumber: 1,
+                            title: "第一章 开始",
+                            wordCount: 10000,
+                            content: "这是第一章的内容...",
+                            status: "completed"
+                        ],
+                        [
+                            chapterId: "chapter_2", 
+                            chapterNumber: 2,
+                            title: "第二章 发展",
+                            wordCount: 12000,
+                            content: "这是第二章的内容...",
+                            status: "completed"
+                        ],
+                        [
+                            chapterId: "chapter_3",
+                            chapterNumber: 3,
+                            title: "第三章 转折", 
+                            wordCount: 11000,
+                            content: "这是第三章的内容...",
+                            status: "completed"
+                        ],
+                        [
+                            chapterId: "chapter_4",
+                            chapterNumber: 4,
+                            title: "第四章 高潮",
+                            wordCount: 9000,
+                            content: "这是第四章的内容...",
+                            status: "completed"
+                        ],
+                        [
+                            chapterId: "chapter_5",
+                            chapterNumber: 5,
+                            title: "第五章 结局",
+                            wordCount: 8000,
+                            content: "这是第五章的内容...",
+                            status: "completed"
+                        ]
+                    ],
+                    characters: [
+                        [
+                            characterId: "char_1",
+                            name: "主角",
+                            role: "protagonist",
+                            description: "故事的主人公，勇敢而善良",
+                            appearances: 25,
+                            importance: "high"
+                        ],
+                        [
+                            characterId: "char_2",
+                            name: "反派",
+                            role: "antagonist",
+                            description: "故事的反面角色，狡猾而强大", 
+                            appearances: 15,
+                            importance: "high"
+                        ]
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Characters" authenticate="false">
+        <description>Get characters for a novel</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+            <parameter name="role"/>
+            <parameter name="isLocked"/>
+            <parameter name="minMentionCount" type="Integer"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="characters" type="List"/>
+            <parameter name="totalCount" type="Integer"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "角色列表获取成功"
+                
+                // 模拟角色数据
+                characters = [
+                    [
+                        characterId: "char_1",
+                        novelId: novelId,
+                        name: "主角",
+                        role: "protagonist",
+                        description: "故事的主人公，勇敢而善良，拥有坚定的意志和正义感",
+                        appearance: "身材高大，黑色短发，深邃的眼神",
+                        personality: "勇敢、善良、坚定、有正义感",
+                        mentionCount: 25,
+                        extractionConfidence: 0.95,
+                        isLocked: false,
+                        createdDate: new Date(),
+                        relationships: [
+                            [
+                                relatedCharacterId: "char_2",
+                                relatedCharacterName: "反派",
+                                relationshipType: "敌对",
+                                description: "主要对手，代表邪恶势力"
+                            ],
+                            [
+                                relatedCharacterId: "char_3",
+                                relatedCharacterName: "配角",
+                                relationshipType: "朋友",
+                                description: "忠实的伙伴和支持者"
+                            ]
+                        ]
+                    ],
+                    [
+                        characterId: "char_2",
+                        novelId: novelId,
+                        name: "反派",
+                        role: "antagonist",
+                        description: "故事的反面角色，狡猾而强大，是主角的主要对手",
+                        appearance: "身材修长，银色长发，冷酷的表情",
+                        personality: "狡猾、冷酷、野心勃勃、不择手段",
+                        mentionCount: 15,
+                        extractionConfidence: 0.88,
+                        isLocked: false,
+                        createdDate: new Date(),
+                        relationships: [
+                            [
+                                relatedCharacterId: "char_1",
+                                relatedCharacterName: "主角",
+                                relationshipType: "敌对",
+                                description: "主要敌人，代表正义势力"
+                            ]
+                        ]
+                    ],
+                    [
+                        characterId: "char_3",
+                        novelId: novelId,
+                        name: "配角",
+                        role: "supporting",
+                        description: "主角的朋友，提供帮助和支持",
+                        appearance: "中等身材，棕色头发，友善的笑容",
+                        personality: "忠诚、友善、乐观、可靠",
+                        mentionCount: 10,
+                        extractionConfidence: 0.75,
+                        isLocked: false,
+                        createdDate: new Date(),
+                        relationships: [
+                            [
+                                relatedCharacterId: "char_1",
+                                relatedCharacterName: "主角",
+                                relationshipType: "朋友",
+                                description: "忠实的朋友和支持者"
+                            ]
+                        ]
+                    ]
+                ]
+                
+                // 应用过滤器
+                if (role) {
+                    characters = characters.findAll { it.role == role }
+                }
+                if (isLocked != null) {
+                    def locked = isLocked == "true" || isLocked == "Y"
+                    characters = characters.findAll { it.isLocked == locked }
+                }
+                if (minMentionCount) {
+                    characters = characters.findAll { it.mentionCount >= minMentionCount }
+                }
+                
+                totalCount = characters.size()
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Character" authenticate="false">
+        <description>Get single character details</description>
+        <in-parameters>
+            <parameter name="characterId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="character" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "角色详情获取成功"
+                
+                // 模拟角色详情数据
+                character = [
+                    characterId: characterId,
+                    novelId: "novel_1768670460718",
+                    name: "主角",
+                    role: "protagonist",
+                    description: "故事的主人公，勇敢而善良，拥有坚定的意志和正义感",
+                    appearance: "身材高大，黑色短发，深邃的眼神",
+                    personality: "勇敢、善良、坚定、有正义感",
+                    mentionCount: 25,
+                    extractionConfidence: 0.95,
+                    isLocked: false,
+                    createdDate: new Date(),
+                    relationships: [
+                        [
+                            relatedCharacterId: "char_2",
+                            relatedCharacterName: "反派",
+                            relationshipType: "敌对",
+                            description: "主要对手，代表邪恶势力"
+                        ]
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Character" authenticate="false">
+        <description>Update character information</description>
+        <in-parameters>
+            <parameter name="characterId" required="true"/>
+            <parameter name="name"/>
+            <parameter name="role"/>
+            <parameter name="description"/>
+            <parameter name="appearance"/>
+            <parameter name="personality"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "角色信息更新成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="Character" authenticate="false">
+        <description>Delete character</description>
+        <in-parameters>
+            <parameter name="characterId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "角色删除成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Additional Character Services -->
+    <service verb="lock" noun="Character" authenticate="false">
+        <description>Lock/unlock character</description>
+        <in-parameters>
+            <parameter name="characterId" required="true"/>
+            <parameter name="isLocked" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = isLocked == "Y" ? "角色已锁定" : "角色已解锁"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="create" noun="CharacterRelationship" authenticate="false">
+        <description>Create character relationship</description>
+        <in-parameters>
+            <parameter name="characterId" required="true"/>
+            <parameter name="relatedCharacterId" required="true"/>
+            <parameter name="relationshipType" required="true"/>
+            <parameter name="description"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "角色关系创建成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="merge" noun="Characters" authenticate="false">
+        <description>Merge characters</description>
+        <in-parameters>
+            <parameter name="primaryCharacterId" required="true"/>
+            <parameter name="duplicateCharacterId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "角色合并成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Novel File Import Service -->
+    <service verb="import" noun="NovelFile" authenticate="false">
+        <description>Import novel from file</description>
+        <in-parameters>
+            <parameter name="projectId"/>
+            <parameter name="title"/>
+            <parameter name="author"/>
+            <parameter name="fileName" required="true"/>
+            <parameter name="fileContent" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="novel" type="Map"/>
+            <parameter name="creditsUsed" type="Integer"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "文件导入成功"
+                creditsUsed = 5
+                
+                def novelId = "novel_" + System.currentTimeMillis()
+                
+                novel = [
+                    novelId: novelId,
+                    id: novelId,
+                    title: title ?: fileName,
+                    author: author ?: "未知作者",
+                    projectId: projectId,
+                    status: "imported",
+                    wordCount: 45000,
+                    createdDate: new Date(),
+                    updatedDate: new Date()
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Novel List Service -->
+    <service verb="get" noun="Novels" authenticate="false">
+        <description>Get novels list</description>
+        <in-parameters>
+            <parameter name="projectId"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="novels" type="List"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "小说列表获取成功"
+                
+                novels = [
+                    [
+                        novelId: "novel_1768670460718",
+                        id: "novel_1768670460718",
+                        title: "测试小说",
+                        author: "测试作者",
+                        projectId: projectId ?: "proj_default",
+                        status: "imported",
+                        wordCount: 50000,
+                        createdDate: new Date(),
+                        updatedDate: new Date()
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Novel Update Service -->
+    <service verb="update" noun="Novel" authenticate="false">
+        <description>Update novel metadata</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+            <parameter name="title"/>
+            <parameter name="author"/>
+            <parameter name="status"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "小说信息更新成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Novel Delete Service -->
+    <service verb="delete" noun="Novel" authenticate="false">
+        <description>Delete novel</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "小说删除成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Episode Services -->
+    <service verb="generate" noun="Episodes" authenticate="false">
+        <description>Generate episodes from scenes</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+            <parameter name="targetDuration" type="Integer"/>
+            <parameter name="maxEpisodes" type="Integer"/>
+            <parameter name="groupingStrategy"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="episodesGenerated" type="Integer"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                episodesGenerated = 8
+                message = "剧集生成成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Episodes" authenticate="false">
+        <description>Get episodes for a novel</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+            <parameter name="status"/>
+            <parameter name="minDuration" type="Integer"/>
+            <parameter name="maxDuration" type="Integer"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="episodes" type="List"/>
+            <parameter name="totalCount" type="Integer"/>
+            <parameter name="totalDuration" type="Integer"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "剧集列表获取成功"
+                
+                episodes = [
+                    [
+                        episodeId: "ep_1",
+                        novelId: novelId,
+                        episodeNumber: 1,
+                        title: "第一集 开端",
+                        summary: "故事的开始，介绍主要角色和背景",
+                        duration: 25,
+                        status: "generated",
+                        sceneCount: 3,
+                        createdDate: new Date()
+                    ],
+                    [
+                        episodeId: "ep_2",
+                        novelId: novelId,
+                        episodeNumber: 2,
+                        title: "第二集 冲突",
+                        summary: "主要冲突的展开",
+                        duration: 28,
+                        status: "reviewed",
+                        sceneCount: 4,
+                        createdDate: new Date()
+                    ]
+                ]
+                
+                totalCount = episodes.size()
+                totalDuration = episodes.sum { it.duration }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Episode" authenticate="false">
+        <description>Update episode information</description>
+        <in-parameters>
+            <parameter name="episodeId" required="true"/>
+            <parameter name="title"/>
+            <parameter name="summary"/>
+            <parameter name="status"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "剧集信息更新成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="Episode" authenticate="false">
+        <description>Delete episode</description>
+        <in-parameters>
+            <parameter name="episodeId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "剧集删除成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="generate" noun="EpisodeScreenplay" authenticate="false">
+        <description>Generate screenplay for episode</description>
+        <in-parameters>
+            <parameter name="episodeId" required="true"/>
+            <parameter name="format"/>
+            <parameter name="includeVisualNotes" type="Boolean"/>
+            <parameter name="includeCharacterNotes" type="Boolean"/>
+            <parameter name="includeDirectorNotes" type="Boolean"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="screenplay" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "剧本生成成功"
+                
+                screenplay = [
+                    screenplayId: "screenplay_" + System.currentTimeMillis(),
+                    episodeId: episodeId,
+                    format: format ?: "markdown",
+                    content: "# 剧本内容\n\n这是生成的剧本内容...",
+                    generatedDate: new Date()
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="adjust" noun="EpisodeBoundaries" authenticate="false">
+        <description>Adjust episode boundaries</description>
+        <in-parameters>
+            <parameter name="episodeId" required="true"/>
+            <parameter name="newScenes" type="List"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "剧集边界调整成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="EpisodeStats" authenticate="false">
+        <description>Get episode statistics</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="stats" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "剧集统计获取成功"
+                
+                stats = [
+                    totalEpisodes: 8,
+                    totalDuration: 200,
+                    averageDuration: 25,
+                    averageScenesPerEpisode: 3.5,
+                    statusDistribution: [
+                        generated: 3,
+                        reviewed: 3,
+                        finalized: 2
+                    ],
+                    durationDistribution: [
+                        [range: "20-25分钟", count: 3],
+                        [range: "25-30分钟", count: 4],
+                        [range: "30-35分钟", count: 1]
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Scene Services -->
+    <service verb="enhance" noun="Scenes" authenticate="false">
+        <description>Enhance scenes with AI analysis</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="scenesEnhanced" type="Integer"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                scenesEnhanced = 15
+                message = "场景增强完成"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Scenes" authenticate="false">
+        <description>Get scenes for a novel</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+            <parameter name="chapterId"/>
+            <parameter name="status"/>
+            <parameter name="mood"/>
+            <parameter name="timeOfDay"/>
+            <parameter name="weather"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="scenes" type="List"/>
+            <parameter name="totalCount" type="Integer"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "场景列表获取成功"
+                
+                scenes = [
+                    [
+                        sceneId: "scene_1",
+                        novelId: novelId,
+                        chapterId: "chapter_1",
+                        sceneNumber: 1,
+                        content: "这是第一个场景的内容...",
+                        setting: "城市街道",
+                        mood: "紧张",
+                        timeOfDay: "夜晚",
+                        weather: "雨天",
+                        visualDescription: "昏暗的街道，霓虹灯闪烁，雨水反射着光芒",
+                        status: "enhanced",
+                        isApproved: true,
+                        createdDate: new Date(),
+                        chapter: [
+                            chapterId: "chapter_1",
+                            chapterNumber: 1,
+                            title: "第一章 开始"
+                        ]
+                    ],
+                    [
+                        sceneId: "scene_2",
+                        novelId: novelId,
+                        chapterId: "chapter_1",
+                        sceneNumber: 2,
+                        content: "这是第二个场景的内容...",
+                        setting: "咖啡厅",
+                        mood: "温馨",
+                        timeOfDay: "下午",
+                        weather: "晴天",
+                        visualDescription: "温暖的咖啡厅，阳光透过窗户洒在桌子上",
+                        status: "pending",
+                        isApproved: false,
+                        createdDate: new Date(),
+                        chapter: [
+                            chapterId: "chapter_1",
+                            chapterNumber: 1,
+                            title: "第一章 开始"
+                        ]
+                    ]
+                ]
+                
+                totalCount = scenes.size()
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Scene" authenticate="false">
+        <description>Update scene information</description>
+        <in-parameters>
+            <parameter name="sceneId" required="true"/>
+            <parameter name="content"/>
+            <parameter name="setting"/>
+            <parameter name="mood"/>
+            <parameter name="timeOfDay"/>
+            <parameter name="weather"/>
+            <parameter name="visualDescription"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "场景信息更新成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="approve" noun="Scene" authenticate="false">
+        <description>Approve/reject scene</description>
+        <in-parameters>
+            <parameter name="sceneId" required="true"/>
+            <parameter name="isApproved" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = isApproved == "Y" ? "场景已批准" : "场景已拒绝"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="reanalyze" noun="Scene" authenticate="false">
+        <description>Re-analyze scene</description>
+        <in-parameters>
+            <parameter name="sceneId" required="true"/>
+            <parameter name="focusOnVisuals" type="Boolean"/>
+            <parameter name="enhanceDialogue" type="Boolean"/>
+            <parameter name="analyzeCharacters" type="Boolean"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "场景重新分析完成"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="SceneStats" authenticate="false">
+        <description>Get scene statistics</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="stats" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "场景统计获取成功"
+                
+                stats = [
+                    totalScenes: 15,
+                    pendingScenes: 3,
+                    enhancedScenes: 8,
+                    approvedScenes: 4,
+                    averageSceneLength: 500,
+                    moodDistribution: [
+                        紧张: 5,
+                        温馨: 3,
+                        悲伤: 2,
+                        欢乐: 3,
+                        神秘: 2
+                    ],
+                    timeDistribution: [
+                        早晨: 3,
+                        下午: 4,
+                        夜晚: 6,
+                        深夜: 2
+                    ],
+                    weatherDistribution: [
+                        晴天: 8,
+                        雨天: 4,
+                        阴天: 2,
+                        雪天: 1
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Pipeline Services -->
+    <service verb="create" noun="Pipeline" authenticate="false">
+        <description>Create processing pipeline for a novel</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="pipeline" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "处理管道创建成功"
+                
+                def pipelineId = "pipeline_" + System.currentTimeMillis()
+                
+                pipeline = [
+                    pipelineId: pipelineId,
+                    novelId: novelId,
+                    status: "created",
+                    currentStage: "structure_analysis",
+                    totalStages: 5,
+                    completedStages: 0,
+                    creditsReserved: 100,
+                    creditsUsed: 0,
+                    estimatedDuration: 300,
+                    createdDate: new Date()
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="PipelineStatus" authenticate="false">
+        <description>Get pipeline status</description>
+        <in-parameters>
+            <parameter name="novelId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="pipeline" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "管道状态获取成功"
+                
+                pipeline = [
+                    pipelineId: "pipeline_1768670460718",
+                    novelId: novelId,
+                    status: "running",
+                    currentStage: "character_extraction",
+                    totalStages: 5,
+                    completedStages: 2,
+                    creditsReserved: 100,
+                    creditsUsed: 40,
+                    estimatedDuration: 300,
+                    startTime: new Date(System.currentTimeMillis() - 120000),
+                    stages: [
+                        [
+                            stageName: "structure_analysis",
+                            status: "completed",
+                            startTime: new Date(System.currentTimeMillis() - 120000),
+                            endTime: new Date(System.currentTimeMillis() - 90000),
+                            creditsUsed: 20
+                        ],
+                        [
+                            stageName: "character_extraction",
+                            status: "running",
+                            startTime: new Date(System.currentTimeMillis() - 90000),
+                            creditsUsed: 20
+                        ]
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="update" noun="PipelineProgress" authenticate="false">
+        <description>Update pipeline progress</description>
+        <in-parameters>
+            <parameter name="pipelineId" required="true"/>
+            <parameter name="currentStage"/>
+            <parameter name="completedStages" type="Integer"/>
+            <parameter name="creditsUsed" type="Integer"/>
+            <parameter name="progress" type="Integer"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "管道进度更新成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="complete" noun="Pipeline" authenticate="false">
+        <description>Complete pipeline</description>
+        <in-parameters>
+            <parameter name="pipelineId" required="true"/>
+            <parameter name="finalCreditsUsed" type="Integer"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="creditsRefunded" type="Integer"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                creditsRefunded = 20
+                message = "管道处理完成"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="fail" noun="Pipeline" authenticate="false">
+        <description>Fail pipeline</description>
+        <in-parameters>
+            <parameter name="pipelineId" required="true"/>
+            <parameter name="errorMessage" required="true"/>
+            <parameter name="failedStage"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="creditsRefunded" type="Integer"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                creditsRefunded = 60
+                message = "管道处理失败，积分已退还"
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Workflow Services -->
+    <service verb="get" noun="Workflows" authenticate="false">
+        <description>Get workflows list</description>
+        <in-parameters>
+            <parameter name="projectId"/>
+            <parameter name="userId"/>
+            <parameter name="status"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="workflows" type="List"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "工作流列表获取成功"
+                
+                workflows = [
+                    [
+                        workflowId: "wf_" + System.currentTimeMillis(),
+                        name: "小说转动漫基础流程",
+                        description: "将小说文本转换为动漫分镜的标准工作流",
+                        status: "active",
+                        nodeCount: 5,
+                        createdDate: new Date(),
+                        updatedDate: new Date()
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Workflow" authenticate="false">
+        <description>Get single workflow</description>
+        <in-parameters>
+            <parameter name="workflowId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="workflow" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "工作流获取成功"
+                
+                workflow = [
+                    workflowId: workflowId,
+                    name: "小说转动漫基础流程",
+                    description: "将小说文本转换为动漫分镜的标准工作流",
+                    status: "active",
+                    nodeCount: 5,
+                    createdDate: new Date(),
+                    updatedDate: new Date(),
+                    nodes: [],
+                    connections: []
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="create" noun="Workflow" authenticate="false">
+        <description>Create workflow</description>
+        <in-parameters>
+            <parameter name="projectId"/>
+            <parameter name="userId"/>
+            <parameter name="name" required="true"/>
+            <parameter name="description"/>
+            <parameter name="status"/>
+            <parameter name="nodes"/>
+            <parameter name="connections"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="workflowId" type="String"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                workflowId = "wf_" + System.currentTimeMillis()
+                message = "工作流创建成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Workflow" authenticate="false">
+        <description>Update workflow</description>
+        <in-parameters>
+            <parameter name="workflowId" required="true"/>
+            <parameter name="name"/>
+            <parameter name="description"/>
+            <parameter name="status"/>
+            <parameter name="nodes"/>
+            <parameter name="connections"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "工作流更新成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="Workflow" authenticate="false">
+        <description>Delete workflow</description>
+        <in-parameters>
+            <parameter name="workflowId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "工作流删除成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Workflow Template Services -->
+    <service verb="get" noun="WorkflowTemplates" authenticate="false">
+        <description>Get workflow templates</description>
+        <in-parameters>
+            <parameter name="userId"/>
+            <parameter name="isBuiltIn"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="templates" type="List"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "工作流模板获取成功"
+                
+                templates = [
+                    [
+                        templateId: "tpl_basic",
+                        name: "基础小说转动漫",
+                        description: "适合新手的基础转换流程",
+                        isBuiltIn: "Y",
+                        nodeCount: 3,
+                        estimatedTime: "30分钟",
+                        useCase: "短篇小说转换"
+                    ],
+                    [
+                        templateId: "tpl_advanced",
+                        name: "高级小说转动漫",
+                        description: "包含角色分析和场景优化的完整流程",
+                        isBuiltIn: "Y",
+                        nodeCount: 8,
+                        estimatedTime: "2小时",
+                        useCase: "长篇小说转换"
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="WorkflowTemplate" authenticate="false">
+        <description>Get single workflow template</description>
+        <in-parameters>
+            <parameter name="templateId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="template" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "工作流模板获取成功"
+                
+                template = [
+                    templateId: templateId,
+                    name: "基础小说转动漫",
+                    description: "适合新手的基础转换流程",
+                    isBuiltIn: "Y",
+                    nodeCount: 3,
+                    estimatedTime: "30分钟",
+                    useCase: "短篇小说转换",
+                    nodes: [],
+                    connections: []
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="create" noun="WorkflowTemplate" authenticate="false">
+        <description>Create workflow template</description>
+        <in-parameters>
+            <parameter name="userId"/>
+            <parameter name="name" required="true"/>
+            <parameter name="description"/>
+            <parameter name="isBuiltIn"/>
+            <parameter name="nodeCount" type="Integer"/>
+            <parameter name="estimatedTime"/>
+            <parameter name="useCase"/>
+            <parameter name="nodes"/>
+            <parameter name="connections"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="templateId" type="String"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                templateId = "tpl_" + System.currentTimeMillis()
+                message = "工作流模板创建成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="update" noun="WorkflowTemplate" authenticate="false">
+        <description>Update workflow template</description>
+        <in-parameters>
+            <parameter name="templateId" required="true"/>
+            <parameter name="name"/>
+            <parameter name="description"/>
+            <parameter name="nodeCount" type="Integer"/>
+            <parameter name="estimatedTime"/>
+            <parameter name="useCase"/>
+            <parameter name="nodes"/>
+            <parameter name="connections"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "工作流模板更新成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="WorkflowTemplate" authenticate="false">
+        <description>Delete workflow template</description>
+        <in-parameters>
+            <parameter name="templateId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "工作流模板删除成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Workflow Execution Services -->
+    <service verb="get" noun="WorkflowExecutions" authenticate="false">
+        <description>Get workflow executions</description>
+        <in-parameters>
+            <parameter name="workflowId"/>
+            <parameter name="status"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="executions" type="List"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "工作流执行记录获取成功"
+                
+                executions = [
+                    [
+                        executionId: "exec_" + System.currentTimeMillis(),
+                        workflowId: workflowId ?: "wf_default",
+                        workflowName: "小说转动漫基础流程",
+                        status: "completed",
+                        nodeCount: 5,
+                        startTime: new Date(),
+                        endTime: new Date(),
+                        duration: 1800
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="WorkflowExecution" authenticate="false">
+        <description>Get single workflow execution</description>
+        <in-parameters>
+            <parameter name="executionId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="execution" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "工作流执行记录获取成功"
+                
+                execution = [
+                    executionId: executionId,
+                    workflowId: "wf_default",
+                    workflowName: "小说转动漫基础流程",
+                    status: "completed",
+                    nodeCount: 5,
+                    startTime: new Date(),
+                    endTime: new Date(),
+                    duration: 1800,
+                    logs: []
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="create" noun="WorkflowExecution" authenticate="false">
+        <description>Create workflow execution</description>
+        <in-parameters>
+            <parameter name="workflowId" required="true"/>
+            <parameter name="workflowName"/>
+            <parameter name="status"/>
+            <parameter name="nodeCount" type="Integer"/>
+            <parameter name="logs"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="executionId" type="String"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                executionId = "exec_" + System.currentTimeMillis()
+                message = "工作流执行创建成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="update" noun="WorkflowExecution" authenticate="false">
+        <description>Update workflow execution</description>
+        <in-parameters>
+            <parameter name="executionId" required="true"/>
+            <parameter name="status"/>
+            <parameter name="endTime"/>
+            <parameter name="duration" type="Integer"/>
+            <parameter name="logs"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "工作流执行更新成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <!-- Asset Services -->
+    <service verb="get" noun="Assets" authenticate="false">
+        <description>Get assets list</description>
+        <in-parameters>
+            <parameter name="projectId"/>
+            <parameter name="novelId"/>
+            <parameter name="userId"/>
+            <parameter name="assetType"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="assets" type="List"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "资源列表获取成功"
+                
+                assets = [
+                    [
+                        assetId: "asset_" + System.currentTimeMillis(),
+                        projectId: projectId ?: "proj_default",
+                        assetType: "image",
+                        name: "角色设计图",
+                        description: "主角的角色设计参考图",
+                        filePath: "/assets/characters/protagonist.jpg",
+                        fileSize: 1024000,
+                        version: "1.0",
+                        isShared: "N",
+                        createdDate: new Date()
+                    ]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Asset" authenticate="false">
+        <description>Get single asset</description>
+        <in-parameters>
+            <parameter name="assetId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="asset" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "资源获取成功"
+                
+                asset = [
+                    assetId: assetId,
+                    projectId: "proj_default",
+                    assetType: "image",
+                    name: "角色设计图",
+                    description: "主角的角色设计参考图",
+                    filePath: "/assets/characters/protagonist.jpg",
+                    fileSize: 1024000,
+                    version: "1.0",
+                    isShared: "N",
+                    createdDate: new Date(),
+                    metadata: [:]
+                ]
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="create" noun="Asset" authenticate="false">
+        <description>Create asset</description>
+        <in-parameters>
+            <parameter name="projectId"/>
+            <parameter name="novelId"/>
+            <parameter name="userId"/>
+            <parameter name="assetType" required="true"/>
+            <parameter name="name" required="true"/>
+            <parameter name="description"/>
+            <parameter name="filePath"/>
+            <parameter name="fileSize" type="Integer"/>
+            <parameter name="metadata"/>
+            <parameter name="version"/>
+            <parameter name="isShared"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="assetId" type="String"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                assetId = "asset_" + System.currentTimeMillis()
+                message = "资源创建成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Asset" authenticate="false">
+        <description>Update asset</description>
+        <in-parameters>
+            <parameter name="assetId" required="true"/>
+            <parameter name="name"/>
+            <parameter name="description"/>
+            <parameter name="filePath"/>
+            <parameter name="fileSize" type="Integer"/>
+            <parameter name="metadata"/>
+            <parameter name="version"/>
+            <parameter name="isShared"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "资源更新成功"
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="Asset" authenticate="false">
+        <description>Delete asset</description>
+        <in-parameters>
+            <parameter name="assetId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                success = true
+                message = "资源删除成功"
+            ]]></script>
+        </actions>
+    </service>
+
+</services>

@@ -1,12 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <entity-facade-xml type="demo">
+    <!-- Demo/Test User Account -->
+    <moqui.security.UserAccount 
+        userId="test-user-001"
+        username="testuser"
+        userFullName="测试用户"
+        emailAddress="test@novelanime.local"
+        currentPassword="moqui"
+        passwordHashType="SHA"
+        disabled="N"
+        requirePasswordChange="N"/>
+    
     <!-- Demo/Test User for Development -->
     <novel.anime.user.NovelAnimeUser 
         userId="test-user-001" 
         email="test@novelanime.local"
-        username="测试用户"
         credits="1000"
-        status="active"/>
+        status="active"
+        createdDate="2024-01-01 00:00:00.000"/>
     
     <!-- Demo Project -->
     <novel.anime.Project 
@@ -15,4 +26,38 @@
         description="这是一个用于测试的示例项目"
         userId="test-user-001"
         status="active"/>
+
+    <!-- Built-in Workflow Templates -->
+    <novel.anime.WorkflowTemplate
+        templateId="t1"
+        name="标准转换流程"
+        description="完整的小说到视频转换流程，包含所有处理节点"
+        isBuiltIn="Y"
+        nodeCount="5"
+        estimatedTime="30-60分钟"
+        useCase="适用于需要完整转换的项目"
+        nodesJson='["novel-parser", "character-analyzer", "scene-generator", "script-converter", "video-generator"]'
+        connectionsJson='[]'/>
+
+    <novel.anime.WorkflowTemplate
+        templateId="t2"
+        name="快速预览流程"
+        description="快速生成预览视频，跳过部分分析步骤"
+        isBuiltIn="Y"
+        nodeCount="3"
+        estimatedTime="10-20分钟"
+        useCase="适用于快速预览效果"
+        nodesJson='["novel-parser", "scene-generator", "video-generator"]'
+        connectionsJson='[]'/>
+
+    <novel.anime.WorkflowTemplate
+        templateId="t3"
+        name="高质量输出"
+        description="高质量视频输出流程，包含详细的角色和场景分析"
+        isBuiltIn="Y"
+        nodeCount="5"
+        estimatedTime="60-120分钟"
+        useCase="适用于最终输出的高质量视频"
+        nodesJson='["novel-parser", "character-analyzer", "scene-generator", "script-converter", "video-generator"]'
+        connectionsJson='[]'/>
 </entity-facade-xml>

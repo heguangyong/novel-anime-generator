@@ -959,7 +959,7 @@
                         .condition("userId", userId)
                         .one()
 
-                    if (novelAnimeUser &amp;&amp; novelAnimeUser.status != 'active') {
+                    if (novelAnimeUser && novelAnimeUser.status != 'active') {
                         ec.artifactExecution.enableAuthz()
                         success = false
                         message = "User account is not active."
@@ -1225,7 +1225,7 @@
                         if (emailsResponse.statusCode() == 200) {
                             def emails = new JsonSlurper().parseText(emailsResponse.body())
                             // Find primary email or first verified email
-                            def primaryEmail = emails.find { it.primary &amp;&amp; it.verified }
+                            def primaryEmail = emails.find { it.primary && it.verified }
                             if (!primaryEmail) {
                                 primaryEmail = emails.find { it.verified }
                             }
@@ -1442,7 +1442,7 @@
                             // Update NovelAnimeUser's last login and avatar
                             if (novelAnimeUser) {
                                 novelAnimeUser.lastLoginDate = now
-                                if (avatarUrl &amp;&amp; !novelAnimeUser.avatarUrl) {
+                                if (avatarUrl && !novelAnimeUser.avatarUrl) {
                                     novelAnimeUser.avatarUrl = avatarUrl
                                 }
                                 novelAnimeUser.update()
@@ -1494,7 +1494,7 @@
                             } else {
                                 // Update existing NovelAnimeUser
                                 novelAnimeUser.lastLoginDate = now
-                                if (avatarUrl &amp;&amp; !novelAnimeUser.avatarUrl) {
+                                if (avatarUrl && !novelAnimeUser.avatarUrl) {
                                     novelAnimeUser.avatarUrl = avatarUrl
                                 }
                                 novelAnimeUser.update()
@@ -2058,7 +2058,7 @@
                             // Update NovelAnimeUser's last login and avatar
                             if (novelAnimeUser) {
                                 novelAnimeUser.lastLoginDate = now
-                                if (avatarUrl &amp;&amp; !novelAnimeUser.avatarUrl) {
+                                if (avatarUrl && !novelAnimeUser.avatarUrl) {
                                     novelAnimeUser.avatarUrl = avatarUrl
                                 }
                                 novelAnimeUser.update()
@@ -2110,7 +2110,7 @@
                             } else {
                                 // Update existing NovelAnimeUser
                                 novelAnimeUser.lastLoginDate = now
-                                if (avatarUrl &amp;&amp; !novelAnimeUser.avatarUrl) {
+                                if (avatarUrl && !novelAnimeUser.avatarUrl) {
                                     novelAnimeUser.avatarUrl = avatarUrl
                                 }
                                 novelAnimeUser.update()
@@ -2134,7 +2134,7 @@
                             // Step 3: Create new UserAccount first, then NovelAnimeUser (Requirement 5.2)
                             isNewUser = true
                             userId = UUID.randomUUID().toString()
-                            def displayName = username ?: (givenName &amp;&amp; familyName ? "${givenName} ${familyName}" : givenName ?: email.split('@')[0])
+                            def displayName = username ?: (givenName && familyName ? "${givenName} ${familyName}" : givenName ?: email.split('@')[0])
 
                             // Create UserAccount (Moqui's built-in user entity)
                             userAccount = ec.entity.makeValue("moqui.security.UserAccount").setAll([
@@ -2855,7 +2855,7 @@
                             // Update NovelAnimeUser's last login and avatar
                             if (novelAnimeUser) {
                                 novelAnimeUser.lastLoginDate = now
-                                if (avatarUrl &amp;&amp; !novelAnimeUser.avatarUrl) {
+                                if (avatarUrl && !novelAnimeUser.avatarUrl) {
                                     novelAnimeUser.avatarUrl = avatarUrl
                                 }
                                 novelAnimeUser.update()

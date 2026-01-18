@@ -125,7 +125,7 @@
         </actions>
     </service>
 
-    <service verb="update" noun="Project">
+    <service verb="update" noun="Project" authenticate="false">
         <description>Update project metadata</description>
         <in-parameters>
             <parameter name="projectId" type="String" required="true"/>
@@ -407,7 +407,7 @@
     </service>
 
     <!-- Existing Novel Services -->
-    <service verb="get" noun="Novel">
+    <service verb="get" noun="Novel" authenticate="false">
         <description>Get novel by ID</description>
         <in-parameters>
             <parameter name="novelId" type="String" required="true"/>
@@ -423,10 +423,42 @@
                     <order-by field-name="chapterNumber"/>
                 </entity-find>
                 
+                <!-- Get all scenes for this novel -->
+                <entity-find entity-name="novel.anime.Scene" list="allSceneList">
+                    <econdition field-name="novelId" from="novelId"/>
+                    <order-by field-name="sceneNumber"/>
+                </entity-find>
+                
                 <!-- Get processing pipeline -->
                 <entity-find-one entity-name="novel.anime.ProcessingPipeline" value-field="pipelineValue">
                     <field-map field-name="novelId" from="novelId"/>
                 </entity-find-one>
+                
+                <!-- Build chapters with their scenes -->
+                <set field="chaptersWithScenes" from="chapterList.collect { chapter ->
+                    def chapterScenes = allSceneList.findAll { it.chapterId == chapter.chapterId }
+                    return [
+                        id: chapter.chapterId,
+                        chapterId: chapter.chapterId,
+                        chapterNumber: chapter.chapterNumber,
+                        title: chapter.title,
+                        content: chapter.content,
+                        wordCount: chapter.wordCount,
+                        scenes: chapterScenes.collect { scene -> [
+                            sceneId: scene.sceneId,
+                            chapterId: scene.chapterId,
+                            sceneNumber: scene.sceneNumber,
+                            title: scene.title,
+                            content: scene.content,
+                            setting: scene.setting,
+                            mood: scene.mood,
+                            timeOfDay: scene.timeOfDay,
+                            weather: scene.weather,
+                            visualDescription: scene.visualDescription,
+                            status: scene.status
+                        ] }
+                    ]
+                }"/>
                 
                 <set field="novel" from="[
                     novelId: novelValue.novelId,
@@ -439,12 +471,19 @@
                     filename: novelValue.filename,
                     createdDate: novelValue.createdDate,
                     lastUpdated: novelValue.lastUpdated,
-                    chapters: chapterList.collect { [
-                        id: it.chapterId,
-                        title: it.title,
-                        content: it.content,
-                        wordCount: it.wordCount,
-                        scenes: []
+                    chapters: chaptersWithScenes,
+                    scenes: allSceneList.collect { scene -> [
+                        sceneId: scene.sceneId,
+                        chapterId: scene.chapterId,
+                        sceneNumber: scene.sceneNumber,
+                        title: scene.title,
+                        content: scene.content,
+                        setting: scene.setting,
+                        mood: scene.mood,
+                        timeOfDay: scene.timeOfDay,
+                        weather: scene.weather,
+                        visualDescription: scene.visualDescription,
+                        status: scene.status
                     ] },
                     pipeline: pipelineValue ? [
                         pipelineId: pipelineValue.pipelineId,

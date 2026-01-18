@@ -1,0 +1,471 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- ========== Workflow CRUD Services ========== -->
+
+    <service verb="get" noun="Workflows">
+        <description>获取工作流列表</description>
+        <in-parameters>
+            <parameter name="projectId" type="String"/>
+            <parameter name="userId" type="String"/>
+            <parameter name="status" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="workflows" type="List"/>
+        </out-parameters>
+        <actions>
+            <entity-find entity-name="novel.anime.Workflow" list="workflowList">
+                <econdition field-name="projectId" from="projectId" ignore-if-empty="true"/>
+                <econdition field-name="userId" from="userId" ignore-if-empty="true"/>
+                <econdition field-name="status" from="status" ignore-if-empty="true"/>
+                <order-by field-name="-lastUpdatedDate"/>
+            </entity-find>
+            <set field="workflows" from="[]"/>
+            <iterate list="workflowList" entry="workflow">
+                <script><![CDATA[
+                    def wf = [
+                        workflowId: workflow.workflowId,
+                        projectId: workflow.projectId,
+                        userId: workflow.userId,
+                        name: workflow.name,
+                        description: workflow.description,
+                        status: workflow.status,
+                        nodes: workflow.nodesJson ? new groovy.json.JsonSlurper().parseText(workflow.nodesJson) : [],
+                        connections: workflow.connectionsJson ? new groovy.json.JsonSlurper().parseText(workflow.connectionsJson) : [],
+                        createdDate: workflow.createdDate,
+                        lastUpdatedDate: workflow.lastUpdatedDate
+                    ]
+                    workflows.add(wf)
+                ]]></script>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="get" noun="Workflow">
+        <description>获取单个工作流详情</description>
+        <in-parameters>
+            <parameter name="workflowId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="workflow" type="Map"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Workflow" value-field="workflowEntity">
+                <field-map field-name="workflowId"/>
+            </entity-find-one>
+            <if condition="workflowEntity">
+                <script><![CDATA[
+                    workflow = [
+                        workflowId: workflowEntity.workflowId,
+                        projectId: workflowEntity.projectId,
+                        userId: workflowEntity.userId,
+                        name: workflowEntity.name,
+                        description: workflowEntity.description,
+                        status: workflowEntity.status,
+                        nodes: workflowEntity.nodesJson ? new groovy.json.JsonSlurper().parseText(workflowEntity.nodesJson) : [],
+                        connections: workflowEntity.connectionsJson ? new groovy.json.JsonSlurper().parseText(workflowEntity.connectionsJson) : [],
+                        createdDate: workflowEntity.createdDate,
+                        lastUpdatedDate: workflowEntity.lastUpdatedDate
+                    ]
+                ]]></script>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="create" noun="Workflow">
+        <description>创建工作流</description>
+        <in-parameters>
+            <parameter name="projectId" type="String"/>
+            <parameter name="userId" type="String"/>
+            <parameter name="name" type="String" required="true"/>
+            <parameter name="description" type="String"/>
+            <parameter name="status" type="String" default-value="idle"/>
+            <parameter name="nodes" type="List"/>
+            <parameter name="connections" type="List"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="workflowId" type="String"/>
+        </out-parameters>
+        <actions>
+            <set field="workflowId" from="ec.entity.sequencedIdPrimary('novel.anime.Workflow', null, null)"/>
+            <script><![CDATA[
+                nodesJson = nodes ? new groovy.json.JsonBuilder(nodes).toString() : '[]'
+                connectionsJson = connections ? new groovy.json.JsonBuilder(connections).toString() : '[]'
+            ]]></script>
+            <service-call name="create#novel.anime.Workflow" in-map="[
+                workflowId: workflowId,
+                projectId: projectId,
+                userId: userId,
+                name: name,
+                description: description,
+                status: status,
+                nodesJson: nodesJson,
+                connectionsJson: connectionsJson,
+                createdDate: ec.user.nowTimestamp,
+                lastUpdatedDate: ec.user.nowTimestamp
+            ]"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Workflow">
+        <description>更新工作流</description>
+        <in-parameters>
+            <parameter name="workflowId" type="String" required="true"/>
+            <parameter name="name" type="String"/>
+            <parameter name="description" type="String"/>
+            <parameter name="status" type="String"/>
+            <parameter name="nodes" type="List"/>
+            <parameter name="connections" type="List"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="workflowId" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.Workflow" value-field="workflow">
+                <field-map field-name="workflowId"/>
+            </entity-find-one>
+            <if condition="workflow">
+                <set field="updateMap" from="[lastUpdatedDate: ec.user.nowTimestamp]"/>
+                <if condition="name"><set field="updateMap.name" from="name"/></if>
+                <if condition="description != null"><set field="updateMap.description" from="description"/></if>
+                <if condition="status"><set field="updateMap.status" from="status"/></if>
+                <if condition="nodes != null">
+                    <script><![CDATA[
+                        updateMap.nodesJson = new groovy.json.JsonBuilder(nodes).toString()
+                    ]]></script>
+                </if>
+                <if condition="connections != null">
+                    <script><![CDATA[
+                        updateMap.connectionsJson = new groovy.json.JsonBuilder(connections).toString()
+                    ]]></script>
+                </if>
+                <service-call name="update#novel.anime.Workflow" in-map="updateMap + [workflowId: workflowId]"/>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="Workflow">
+        <description>删除工作流</description>
+        <in-parameters>
+            <parameter name="workflowId" type="String" required="true"/>
+        </in-parameters>
+        <actions>
+            <!-- 先删除相关的执行记录 -->
+            <entity-delete-by-condition entity-name="novel.anime.WorkflowExecution">
+                <econdition field-name="workflowId"/>
+            </entity-delete-by-condition>
+            <!-- 删除工作流 -->
+            <service-call name="delete#novel.anime.Workflow" in-map="[workflowId: workflowId]"/>
+        </actions>
+    </service>
+
+    <!-- ========== Workflow Execution Services ========== -->
+
+    <service verb="get" noun="WorkflowExecutions">
+        <description>获取工作流执行记录列表</description>
+        <in-parameters>
+            <parameter name="workflowId" type="String"/>
+            <parameter name="status" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="executions" type="List"/>
+        </out-parameters>
+        <actions>
+            <entity-find entity-name="novel.anime.WorkflowExecution" list="executionList">
+                <econdition field-name="workflowId" from="workflowId" ignore-if-empty="true"/>
+                <econdition field-name="status" from="status" ignore-if-empty="true"/>
+                <order-by field-name="-startTime"/>
+            </entity-find>
+            <set field="executions" from="[]"/>
+            <iterate list="executionList" entry="exec">
+                <script><![CDATA[
+                    def e = [
+                        executionId: exec.executionId,
+                        workflowId: exec.workflowId,
+                        workflowName: exec.workflowName,
+                        status: exec.status,
+                        startTime: exec.startTime,
+                        endTime: exec.endTime,
+                        duration: exec.duration,
+                        nodeCount: exec.nodeCount,
+                        logs: exec.logsJson ? new groovy.json.JsonSlurper().parseText(exec.logsJson) : [],
+                        createdDate: exec.createdDate
+                    ]
+                    executions.add(e)
+                ]]></script>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="get" noun="WorkflowExecution">
+        <description>获取单个执行记录详情</description>
+        <in-parameters>
+            <parameter name="executionId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="execution" type="Map"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.WorkflowExecution" value-field="exec">
+                <field-map field-name="executionId"/>
+            </entity-find-one>
+            <if condition="exec">
+                <script><![CDATA[
+                    execution = [
+                        executionId: exec.executionId,
+                        workflowId: exec.workflowId,
+                        workflowName: exec.workflowName,
+                        status: exec.status,
+                        startTime: exec.startTime,
+                        endTime: exec.endTime,
+                        duration: exec.duration,
+                        nodeCount: exec.nodeCount,
+                        logs: exec.logsJson ? new groovy.json.JsonSlurper().parseText(exec.logsJson) : [],
+                        createdDate: exec.createdDate
+                    ]
+                ]]></script>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="create" noun="WorkflowExecution">
+        <description>创建执行记录</description>
+        <in-parameters>
+            <parameter name="workflowId" type="String" required="true"/>
+            <parameter name="workflowName" type="String"/>
+            <parameter name="status" type="String" default-value="running"/>
+            <parameter name="nodeCount" type="Integer"/>
+            <parameter name="logs" type="List"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="executionId" type="String"/>
+        </out-parameters>
+        <actions>
+            <set field="executionId" from="ec.entity.sequencedIdPrimary('novel.anime.WorkflowExecution', null, null)"/>
+            <script><![CDATA[
+                logsJson = logs ? new groovy.json.JsonBuilder(logs).toString() : '[]'
+            ]]></script>
+            <service-call name="create#novel.anime.WorkflowExecution" in-map="[
+                executionId: executionId,
+                workflowId: workflowId,
+                workflowName: workflowName,
+                status: status,
+                startTime: ec.user.nowTimestamp,
+                nodeCount: nodeCount,
+                logsJson: logsJson,
+                createdDate: ec.user.nowTimestamp
+            ]"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="WorkflowExecution">
+        <description>更新执行状态</description>
+        <in-parameters>
+            <parameter name="executionId" type="String" required="true"/>
+            <parameter name="status" type="String"/>
+            <parameter name="endTime" type="Timestamp"/>
+            <parameter name="duration" type="Integer"/>
+            <parameter name="logs" type="List"/>
+        </in-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.WorkflowExecution" value-field="exec">
+                <field-map field-name="executionId"/>
+            </entity-find-one>
+            <if condition="exec">
+                <set field="updateMap" from="[:]"/>
+                <if condition="status"><set field="updateMap.status" from="status"/></if>
+                <if condition="endTime"><set field="updateMap.endTime" from="endTime"/></if>
+                <if condition="duration != null"><set field="updateMap.duration" from="duration"/></if>
+                <if condition="logs != null">
+                    <script><![CDATA[
+                        updateMap.logsJson = new groovy.json.JsonBuilder(logs).toString()
+                    ]]></script>
+                </if>
+                <service-call name="update#novel.anime.WorkflowExecution" in-map="updateMap + [executionId: executionId]"/>
+            </if>
+        </actions>
+    </service>
+
+    <!-- ========== Workflow Template Services ========== -->
+
+    <service verb="get" noun="WorkflowTemplates">
+        <description>获取工作流模板列表</description>
+        <in-parameters>
+            <parameter name="userId" type="String"/>
+            <parameter name="isBuiltIn" type="String"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="templates" type="List"/>
+        </out-parameters>
+        <actions>
+            <entity-find entity-name="novel.anime.WorkflowTemplate" list="templateList">
+                <econdition field-name="userId" from="userId" ignore-if-empty="true"/>
+                <econdition field-name="isBuiltIn" from="isBuiltIn" ignore-if-empty="true"/>
+                <order-by field-name="-createdDate"/>
+            </entity-find>
+            <set field="templates" from="[]"/>
+            <iterate list="templateList" entry="tpl">
+                <script><![CDATA[
+                    def t = [
+                        templateId: tpl.templateId,
+                        userId: tpl.userId,
+                        name: tpl.name,
+                        description: tpl.description,
+                        isBuiltIn: tpl.isBuiltIn == 'Y',
+                        nodeCount: tpl.nodeCount,
+                        estimatedTime: tpl.estimatedTime,
+                        useCase: tpl.useCase,
+                        nodes: tpl.nodesJson ? new groovy.json.JsonSlurper().parseText(tpl.nodesJson) : [],
+                        connections: tpl.connectionsJson ? new groovy.json.JsonSlurper().parseText(tpl.connectionsJson) : [],
+                        createdDate: tpl.createdDate,
+                        lastUpdatedDate: tpl.lastUpdatedDate
+                    ]
+                    templates.add(t)
+                ]]></script>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="get" noun="WorkflowTemplate">
+        <description>获取单个模板详情</description>
+        <in-parameters>
+            <parameter name="templateId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="template" type="Map"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.WorkflowTemplate" value-field="tpl">
+                <field-map field-name="templateId"/>
+            </entity-find-one>
+            <if condition="tpl">
+                <script><![CDATA[
+                    template = [
+                        templateId: tpl.templateId,
+                        userId: tpl.userId,
+                        name: tpl.name,
+                        description: tpl.description,
+                        isBuiltIn: tpl.isBuiltIn == 'Y',
+                        nodeCount: tpl.nodeCount,
+                        estimatedTime: tpl.estimatedTime,
+                        useCase: tpl.useCase,
+                        nodes: tpl.nodesJson ? new groovy.json.JsonSlurper().parseText(tpl.nodesJson) : [],
+                        connections: tpl.connectionsJson ? new groovy.json.JsonSlurper().parseText(tpl.connectionsJson) : [],
+                        createdDate: tpl.createdDate,
+                        lastUpdatedDate: tpl.lastUpdatedDate
+                    ]
+                ]]></script>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="create" noun="WorkflowTemplate">
+        <description>创建工作流模板</description>
+        <in-parameters>
+            <parameter name="userId" type="String"/>
+            <parameter name="name" type="String" required="true"/>
+            <parameter name="description" type="String"/>
+            <parameter name="isBuiltIn" type="String" default-value="N"/>
+            <parameter name="nodeCount" type="Integer"/>
+            <parameter name="estimatedTime" type="String"/>
+            <parameter name="useCase" type="String"/>
+            <parameter name="nodes" type="List"/>
+            <parameter name="connections" type="List"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="templateId" type="String"/>
+        </out-parameters>
+        <actions>
+            <set field="templateId" from="ec.entity.sequencedIdPrimary('novel.anime.WorkflowTemplate', null, null)"/>
+            <script><![CDATA[
+                nodesJson = nodes ? new groovy.json.JsonBuilder(nodes).toString() : '[]'
+                connectionsJson = connections ? new groovy.json.JsonBuilder(connections).toString() : '[]'
+            ]]></script>
+            <service-call name="create#novel.anime.WorkflowTemplate" in-map="[
+                templateId: templateId,
+                userId: userId,
+                name: name,
+                description: description,
+                isBuiltIn: isBuiltIn,
+                nodeCount: nodeCount,
+                estimatedTime: estimatedTime,
+                useCase: useCase,
+                nodesJson: nodesJson,
+                connectionsJson: connectionsJson,
+                createdDate: ec.user.nowTimestamp,
+                lastUpdatedDate: ec.user.nowTimestamp
+            ]"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="WorkflowTemplate">
+        <description>更新工作流模板</description>
+        <in-parameters>
+            <parameter name="templateId" type="String" required="true"/>
+            <parameter name="name" type="String"/>
+            <parameter name="description" type="String"/>
+            <parameter name="nodeCount" type="Integer"/>
+            <parameter name="estimatedTime" type="String"/>
+            <parameter name="useCase" type="String"/>
+            <parameter name="nodes" type="List"/>
+            <parameter name="connections" type="List"/>
+        </in-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.WorkflowTemplate" value-field="tpl">
+                <field-map field-name="templateId"/>
+            </entity-find-one>
+            <if condition="tpl">
+                <set field="updateMap" from="[lastUpdatedDate: ec.user.nowTimestamp]"/>
+                <if condition="name"><set field="updateMap.name" from="name"/></if>
+                <if condition="description != null"><set field="updateMap.description" from="description"/></if>
+                <if condition="nodeCount != null"><set field="updateMap.nodeCount" from="nodeCount"/></if>
+                <if condition="estimatedTime"><set field="updateMap.estimatedTime" from="estimatedTime"/></if>
+                <if condition="useCase"><set field="updateMap.useCase" from="useCase"/></if>
+                <if condition="nodes != null">
+                    <script><![CDATA[
+                        updateMap.nodesJson = new groovy.json.JsonBuilder(nodes).toString()
+                    ]]></script>
+                </if>
+                <if condition="connections != null">
+                    <script><![CDATA[
+                        updateMap.connectionsJson = new groovy.json.JsonBuilder(connections).toString()
+                    ]]></script>
+                </if>
+                <service-call name="update#novel.anime.WorkflowTemplate" in-map="updateMap + [templateId: templateId]"/>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="WorkflowTemplate">
+        <description>删除工作流模板（仅用户模板可删除）</description>
+        <in-parameters>
+            <parameter name="templateId" type="String" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <entity-find-one entity-name="novel.anime.WorkflowTemplate" value-field="tpl">
+                <field-map field-name="templateId"/>
+            </entity-find-one>
+            <if condition="tpl">
+                <if condition="tpl.isBuiltIn == 'Y'">
+                    <set field="success" from="false"/>
+                    <set field="message" value="内置模板不可删除"/>
+                    <else>
+                        <service-call name="delete#novel.anime.WorkflowTemplate" in-map="[templateId: templateId]"/>
+                        <set field="success" from="true"/>
+                        <set field="message" value="模板删除成功"/>
+                    </else>
+                </if>
+                <else>
+                    <set field="success" from="false"/>
+                    <set field="message" value="模板不存在"/>
+                </else>
+            </if>
+        </actions>
+    </service>
+
+</services>
