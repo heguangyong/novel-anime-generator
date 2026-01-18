@@ -94,6 +94,13 @@
         <method type="post"><service name="novel.anime.TestServices.create#Project"/></method>
     </resource>
 
+    <!-- Single Project Resource -->
+    <resource name="project">
+        <method type="get"><service name="novel.anime.TestServices.get#Project"/></method>
+        <method type="put"><service name="novel.anime.TestServices.update#Project"/></method>
+        <method type="delete"><service name="novel.anime.TestServices.delete#Project"/></method>
+    </resource>
+
     <!-- Novel Resources -->
     <resource name="novels">
         <method type="get"><service name="novel.anime.TestServices.get#Novels"/></method>

@@ -167,6 +167,148 @@
         </actions>
     </service>
 
+    <service verb="get" noun="Project" authenticate="false">
+        <description>Get single project by ID</description>
+        <in-parameters>
+            <parameter name="projectId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="project" type="Map"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                try {
+                    success = true
+                    
+                    // 查询项目
+                    def projectEntity = ec.entity.find("novel.anime.Project")
+                        .condition("projectId", projectId)
+                        .disableAuthz()
+                        .one()
+                    
+                    if (projectEntity) {
+                        project = [
+                            projectId: projectEntity.projectId,
+                            id: projectEntity.projectId,
+                            name: projectEntity.name,
+                            description: projectEntity.description,
+                            status: projectEntity.status,
+                            userId: projectEntity.userId,
+                            createdDate: projectEntity.createdDate?.getTime() ?: System.currentTimeMillis(),
+                            updatedDate: projectEntity.lastUpdated?.getTime() ?: System.currentTimeMillis()
+                        ]
+                        message = "项目获取成功"
+                        ec.logger.info("Project retrieved: ${projectId}")
+                    } else {
+                        success = false
+                        project = null
+                        message = "项目不存在"
+                        ec.logger.warn("Project not found: ${projectId}")
+                    }
+                } catch (Exception e) {
+                    ec.logger.error("Failed to get project: ${e.message}", e)
+                    success = false
+                    project = null
+                    message = "项目获取失败: ${e.message}"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="update" noun="Project" authenticate="false">
+        <description>Update project information</description>
+        <in-parameters>
+            <parameter name="projectId" required="true"/>
+            <parameter name="name"/>
+            <parameter name="description"/>
+            <parameter name="status"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                try {
+                    // 禁用权限检查
+                    ec.artifactExecution.disableAuthz()
+                    
+                    // 查询项目
+                    def projectEntity = ec.entity.find("novel.anime.Project")
+                        .condition("projectId", projectId)
+                        .one()
+                    
+                    if (!projectEntity) {
+                        success = false
+                        message = "项目不存在"
+                        return
+                    }
+                    
+                    // 更新字段
+                    if (name) projectEntity.name = name
+                    if (description != null) projectEntity.description = description
+                    if (status) projectEntity.status = status
+                    projectEntity.lastUpdated = ec.user.nowTimestamp
+                    projectEntity.update()
+                    
+                    success = true
+                    message = "项目更新成功"
+                    ec.logger.info("Project updated: ${projectId}")
+                } catch (Exception e) {
+                    ec.logger.error("Failed to update project: ${e.message}", e)
+                    success = false
+                    message = "项目更新失败: ${e.message}"
+                } finally {
+                    // 恢复权限检查
+                    ec.artifactExecution.enableAuthz()
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="Project" authenticate="false">
+        <description>Delete project (soft delete)</description>
+        <in-parameters>
+            <parameter name="projectId" required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="success" type="Boolean"/>
+            <parameter name="message" type="String"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                try {
+                    // 查询项目
+                    def projectEntity = ec.entity.find("novel.anime.Project")
+                        .condition("projectId", projectId)
+                        .disableAuthz()
+                        .one()
+                    
+                    if (!projectEntity) {
+                        success = false
+                        message = "项目不存在"
+                        return
+                    }
+                    
+                    // 软删除：更新状态为deleted
+                    projectEntity.status = "deleted"
+                    projectEntity.lastUpdated = ec.user.nowTimestamp
+                    projectEntity.update()
+                    
+                    success = true
+                    message = "项目删除成功"
+                    ec.logger.info("Project soft deleted: ${projectId}")
+                } catch (Exception e) {
+                    ec.logger.error("Failed to delete project: ${e.message}", e)
+                    success = false
+                    message = "项目删除失败: ${e.message}"
+                }
+            ]]></script>
+        </actions>
+    </service>
+
     <service verb="import" noun="NovelText" authenticate="false">
         <description>Import novel from text</description>
         <in-parameters>
